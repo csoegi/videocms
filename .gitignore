@@ -14,3 +14,12 @@ __debug_bin*
 tmp/main
 videocms
 database/analytics/*
+# --- Nuxt Generated UI Targets ---
+# Ignore the core bundle directory generated on every frontend build
+public/_nuxt/
+
+# Ignore the compiled HTML/JSON routes mirrored out of the frontend page templates
+public/index.html
+public/200.html
+public/404.html
+public/my/

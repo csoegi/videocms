@@ -3,12 +3,11 @@ name: CI
 on:
   pull_request:
     branches:
-      - dev
-      - staging
+      - develop
       - master
   push:
     branches:
-      - dev
+      - develop
   workflow_dispatch:
 
 concurrency:
@@ -19,45 +18,45 @@ permissions:
   contents: read
 
 jobs:
-  promotion-source:
-    name: promotion-source
-    runs-on: ubuntu-latest
-    steps:
-      - name: Validate promotion source
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          TARGET_BRANCH: ${{ github.base_ref }}
-          SOURCE_BRANCH: ${{ github.head_ref }}
-        run: |
-          if [ "$EVENT_NAME" != "pull_request" ]; then
-            echo "Promotion source checks only apply to pull requests."
-            exit 0
-          fi
+  # promotion-source:
+  #   name: promotion-source
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Validate promotion source
+  #       shell: bash
+  #       env:
+  #         EVENT_NAME: ${{ github.event_name }}
+  #         TARGET_BRANCH: ${{ github.base_ref }}
+  #         SOURCE_BRANCH: ${{ github.head_ref }}
+  #       run: |
+  #         if [ "$EVENT_NAME" != "pull_request" ]; then
+  #           echo "Promotion source checks only apply to pull requests."
+  #           exit 0
+  #         fi
 
-          target="$TARGET_BRANCH"
-          source="$SOURCE_BRANCH"
+  #         target="$TARGET_BRANCH"
+  #         source="$SOURCE_BRANCH"
 
-          case "$target" in
-            staging)
-              if [ "$source" != "dev" ]; then
-                echo "Pull requests into staging must come from dev, got: $source"
-                exit 1
-              fi
-              ;;
-            master)
-              if [ "$source" != "staging" ]; then
-                echo "Pull requests into master must come from staging, got: $source"
-                exit 1
-              fi
-              ;;
-            dev)
-              echo "Feature and maintenance branches may target dev."
-              ;;
-            *)
-              echo "No promotion policy configured for target branch: $target"
-              ;;
-          esac
+  #         case "$target" in
+  #           staging)
+  #             if [ "$source" != "dev" ]; then
+  #               echo "Pull requests into staging must come from dev, got: $source"
+  #               exit 1
+  #             fi
+  #             ;;
+  #           master)
+  #             if [ "$source" != "staging" ]; then
+  #               echo "Pull requests into master must come from staging, got: $source"
+  #               exit 1
+  #             fi
+  #             ;;
+  #           dev)
+  #             echo "Feature and maintenance branches may target dev."
+  #             ;;
+  #           *)
+  #             echo "No promotion policy configured for target branch: $target"
+  #             ;;
+  #         esac
 
   go:
     name: go
@@ -200,4 +199,4 @@ jobs:
           build-args: |
             VERSION=ci-${{ github.sha }}
             CHANNEL=ci
-            DOCKER_IMAGE_TAG=kirari04/videocms:ci
+            DOCKER_IMAGE_TAG=chrissoe/videocms:ci
