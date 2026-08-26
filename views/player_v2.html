@@ -312,6 +312,14 @@
                 font-size: 1.18rem;
             }
         }
+        .ad-overlay { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 100; align-items: center; justify-content: center; }
+        .ad-content { position: relative; width: 80%; height: 80%; background: white; }
+        .ad-skip-btn { position: absolute; top: 10px; right: 10px; background: #000; color: #fff; border: none; padding: 10px 15px; cursor: pointer; z-index: 110; font-family: sans-serif; }
+        #ad-banner-frame { width: 100%; height: 100%; }
+        #btn-skip-video-ad {
+            z-index: 2147483647 !important;
+        }
+        .visible-flex { display: flex !important; }
     </style>
 </head>
 <body>
@@ -354,6 +362,19 @@
         </section>
         {{ end }}
     </div>
+
+    <!-- Ad Overlay for Banners -->
+    <div id="ad-banner-overlay" class="ad-overlay">
+        <div class="ad-content">
+            <button id="btn-close-ad" class="ad-skip-btn" style="display: none;">Close [X]</button>
+            <iframe id="ad-banner-frame" src="" frameborder="0"></iframe>
+        </div>
+    </div>
+
+    <!-- Ad Skip Button for Video Ads -->
+    <button id="btn-skip-video-ad" class="ad-skip-btn video-skip" style="display: none;">
+        Skip Ad in <span id="ad-timer"></span>
+    </button>
 
     {{ if .StreamIsReady }}
     <!-- Continue Watching Popup -->
@@ -509,7 +530,197 @@
         let streamUrl = `${FOLDER}/${UUID}/stream/multi/master.m3u8`;
 
         const player = document.querySelector('media-player');
-        player.src = streamUrl;
+        
+        // --- Ad Logic ---
+        const HAS_ADS = "{{.HasAds}}" === "true";
+        const ADS_TYPE = "{{.AdsType}}";        // video | banner
+        const ADS_LINK = "{{.AdsLink}}";        // .mp4 or /p/slug
+        const ADS_DISPLAY = "{{.AdsDisplay}}" || "";  // before_start | mid_roll | center
+        const ADS_SKIP_SEC = parseInt("{{.AdsSkipSeconds}}") || 10;
+        const skipBtn = document.getElementById('btn-skip-video-ad');        
+        const queryParams = new URLSearchParams(window.location.search);
+        const bypassAds = queryParams.get('bypass_ads');  // Retrieve bypass_ads parameter if present
+
+        let adPlayed = false;
+        let adInterval = null;
+        let midRollPlayed = false;
+        let movieStarted = false;
+
+        function initAds() {
+            // 1. Initial State: Load the movie and show the thumbnail
+            player.src = streamUrl;
+            player.poster = THUMB;
+            
+            // 2. If bypass-ads querystring for loggedin CMS user is set, skip all ad logic
+            if (bypassAds) {
+                movieStarted = true;
+                return;
+            }
+
+            // 3. Listen to Play click event and start pre-roll Ad
+            player.addEventListener('play', (event) => {
+                if (!adPlayed && HAS_ADS && ADS_DISPLAY.includes('before_start')) {
+                    if (ADS_TYPE === 'video') {
+                        event.preventDefault(); // Stop the movie from starting
+                        event.stopPropagation();    
+                        startVideoAd();
+                    }
+                    else if (ADS_TYPE === 'banner') {
+                        showBannerAd();
+                    }                    
+                } else
+                {
+                    movieStarted = true; // Mark that the main movie has started
+                }                
+            }, { once: true });
+
+            // 4. Listen for the pre-roll Ad video to finish
+            player.addEventListener('ended', () => {
+                if (player.src.includes(ADS_LINK) && !movieStarted) {
+                    closeVideoAd(0); // Auto resume movie from start after pre-roll ad ends
+                }
+            });
+
+            // 5. Listen to time-update events to trigger mid-roll Ad once we hit the midpoint of the movie
+            player.addEventListener('time-update', (event) => {
+                const midPoint = player.duration / 2;
+                const isMidPointReached = player.currentTime >= midPoint && midPoint > 0 && !player.src.includes(ADS_LINK);
+
+                if (isMidPointReached) {
+                    if (!midRollPlayed && HAS_ADS && ADS_DISPLAY.includes('mid_roll')) {
+                        // Set the lock
+                        midRollPlayed = true;
+                        
+                        // Save current time to resume after ad
+                        const resumeTime = player.currentTime; 
+
+                        if (ADS_TYPE === 'video') {
+                            // Pause movie and play ad
+                            player.src = ADS_LINK;
+                            player.play();
+
+                            // Start skip counter with resumeTime to auto resume movie after ad skipped
+                            setupSkipCounter(resumeTime); 
+
+                            // If the ad ends without being skipped, we need to auto resume the movie at the correct time
+                            player.addEventListener('ended', () => {
+                                closeVideoAd(resumeTime);
+                            }, { once: true });
+                        }
+                        else if (ADS_TYPE === 'banner') {
+                            showBannerAd();
+                        }     
+                    }
+                } 
+            });
+        }
+        
+        function showBannerAd() {
+            const adOverlay = document.getElementById('ad-banner-overlay');
+            const adFrame = document.getElementById('ad-banner-frame');
+            const adCloseBtn = document.getElementById('btn-close-ad');
+
+            adPlayed = true;
+            adFrame.src = ADS_LINK;
+            adOverlay.classList.add('visible-flex');
+
+            if (movieStarted) {
+                player.pause();
+                const savedTime = player.currentTime;
+                // Start the countdown, passing the resume point
+                setupSkipCounter(savedTime);
+            } else {
+                // Pre-roll banner
+                setupSkipCounter(0);
+            }
+        }
+
+        function closeBannerAd(resumeTime) {
+            const adOverlay = document.getElementById('ad-banner-overlay');
+            const adFrame = document.getElementById('ad-banner-frame');
+            adOverlay.classList.remove('visible-flex');
+            adFrame.src = ""; // Clear the iframe to prevent "ghosting" on next load
+            skipBtn.style.display = 'none';
+
+            if (movieStarted) {
+                player.play(); // Resume from pause
+            } else {
+                movieStarted = true;
+                player.play(); // Start for the first time
+            }
+        }
+
+        function startVideoAd() {
+            adPlayed = true;
+            player.src = ADS_LINK; // Load Ad MP4
+            player.autoplay = true;
+            setupSkipCounter(0); // Start skip counter for pre-roll
+        }
+
+        function closeVideoAd(resumeTime = 0) {
+            // Cleanup UI and Timer
+            if (adInterval) {
+                clearInterval(adInterval);
+                adInterval = null;
+            }
+
+            // Reset skip button state and hide it
+            skipBtn.style.display = 'none';
+
+            // Switch back to movie
+            player.src = streamUrl;
+            
+            if (resumeTime > 0) {
+                // Mid-roll Resume
+                setTimeout(() => {
+                    player.currentTime = resumeTime;
+                    player.play();
+                }, 200);
+            } else {
+                // Pre-roll Start
+                movieStarted = true;
+                player.play();
+            }
+        }
+        
+        function setupSkipCounter(resumeTime = 0) {
+            if (!skipBtn || adInterval) return;
+
+            // Reset button state
+            skipBtn.innerHTML = 'Skip Ad <span id="ad-timer"></span>';
+            skipBtn.style.display = 'block';
+            skipBtn.onclick = null; // Remove previous click listener
+            
+            let timeLeft = ADS_SKIP_SEC;
+            const skipTimer = document.getElementById('ad-timer');
+            skipTimer.innerText = timeLeft + 's';
+
+            adInterval = setInterval(() => {
+                timeLeft--;
+                if (timeLeft <= 0) {
+                    clearInterval(adInterval);
+                    adInterval = null;
+                    skipBtn.innerText = "Skip Ad →";
+                    skipBtn.onclick = () => {
+                        if (ADS_TYPE === 'banner') {
+                            closeBannerAd(resumeTime);
+                        } else {
+                            closeVideoAd(resumeTime);
+                        }
+                    };
+                } else {
+                    if (skipTimer) skipTimer.innerText = timeLeft + 's';
+                }
+            }, 1000);
+        }
+
+        // Replace the old player.src assignment with our new init
+        initAds();
+        
+        // --- Setup Analytics Tracking for Streaming ---
+        player.addEventListener('play', () => {
+            fetch(`/api/analytics/stream/${UUID}`, { method: 'POST' });
+        }, { once: true });
 
         // --- Setup Subtitles ---
         const provider = document.querySelector('media-provider');

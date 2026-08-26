@@ -136,6 +136,15 @@ type Config struct {
 	MaxParallelDownloadPreparations   int64
 	MaxQueuedDownloadPreparations     int64
 	DownloadPreparationRetentionHours int64
+	
+	// Advertisement Settings
+	AdsVisibility  bool `env:"ADS_VISIBILITY" envDefault:"false"`
+    AdsSkipSeconds int  `env:"ADS_SKIP_SECONDS" envDefault:"10"`
+
+	// Analytics Settings
+	AnalyticsEnabled        bool `env:"ANALYTICS_ENABLED" envDefault:"true"`
+	AnalyticsLogDuration    int  `env:"ANALYTICS_LOG_DURATION" envDefault:"90"`
+	AnalyticsWorkerInterval int  `env:"ANALYTICS_WORKER_INTERVAL" envDefault:"60"`
 }
 
 type PublicConfig struct {
@@ -163,6 +172,9 @@ type PublicConfig struct {
 	DownloadEnabled       bool
 	RemoteDownloadEnabled bool
 	PlayerV2Enabled       bool
+
+	AdsVisibility    bool
+	AnalyticsEnabled bool
 }
 
 func (c Config) PublicConfig() PublicConfig {
@@ -191,6 +203,9 @@ func (c Config) PublicConfig() PublicConfig {
 		DownloadEnabled:       *c.DownloadEnabled,
 		RemoteDownloadEnabled: *c.RemoteDownloadEnabled,
 		PlayerV2Enabled:       *c.PlayerV2Enabled,
+
+		AdsVisibility:    c.AdsVisibility,
+		AnalyticsEnabled: c.AnalyticsEnabled,
 	}
 }
 
@@ -242,6 +257,16 @@ func LoadEnv() Config {
 	env.FolderVideoQualitysPub = getEnv("FolderVideoQualitysPub", "/videos/qualitys")
 	env.FolderVideoUploadsPriv = getEnv("FolderVideoUploadsPriv", "./videos/uploads")
 	env.StatsDriveName = getEnv("StatsDriveName", "nvme0n1")
+
+	// dvertisement Parameters
+	env.AdsVisibility = getEnv("ADS_VISIBILITY", "false") == "true" // Or use an inline check
+	env.AdsSkipSeconds = getEnv_int("ADS_SKIP_SECONDS", 10)
+
+	// Analytics Parameters
+	// Since getEnv takes strings, we can check for custom fallback strings
+	env.AnalyticsEnabled = getEnv("ANALYTICS_ENABLED", "true") == "true"
+	env.AnalyticsLogDuration = getEnv_int("ANALYTICS_LOG_DURATION", 90)
+	env.AnalyticsWorkerInterval = getEnv_int("ANALYTICS_WORKER_INTERVAL", 60)
 
 	return env
 }

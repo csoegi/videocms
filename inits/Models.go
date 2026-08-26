@@ -76,6 +76,7 @@ func MigrateModels(gormDB *gorm.DB) error {
 		&models.RemoteDownload{},
 		&models.RemoteDownloadLog{},
 		&models.DownloadJob{},
+		&models.Advertisement{},
 	); err != nil {
 		return err
 	}

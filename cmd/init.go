@@ -41,6 +41,10 @@ func InitRuntime() (*app.Deps, error) {
 	if err := inits.EnsureFolders(snapshot.Config); err != nil {
 		return nil, err
 	}
+	if err := inits.SetupAnalytics(); err != nil {
+		log.Println("❌ Critical: Failed to open Analytics DB:", err)
+		return nil, err
+	}
 
 	return &app.Deps{
 		DB:          db,

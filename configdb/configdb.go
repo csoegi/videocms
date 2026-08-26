@@ -114,6 +114,15 @@ func LoadSnapshot(db *gorm.DB, base config.Config) (app.Snapshot, error) {
 	env.MaxQueuedDownloadPreparations = getEnvDb_int64(&setting.MaxQueuedDownloadPreparations, 20)
 	env.DownloadPreparationRetentionHours = getEnvDb_int64(&setting.DownloadPreparationRetentionHours, 6)
 
+	// Mapping Advertisement Settings
+	env.AdsVisibility = *getEnvDb_bool(&setting.AdsVisibility, boolPtr(false))
+	env.AdsSkipSeconds = getEnvDb_int(&setting.AdsSkipSeconds, 10)
+
+	// Mapping Analytics Settings
+	env.AnalyticsEnabled = *getEnvDb_bool(&setting.AnalyticsEnabled, boolPtr(true))
+	env.AnalyticsLogDuration = getEnvDb_int(&setting.AnalyticsLogDuration, 90)
+	env.AnalyticsWorkerInterval = getEnvDb_int(&setting.AnalyticsWorkerInterval, 60)
+
 	// validate config before saving
 	validate := validator.New(validator.WithRequiredStructEnabled())
 	err := validate.Struct(&setting)

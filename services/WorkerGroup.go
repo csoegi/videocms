@@ -70,6 +70,7 @@ func (w *WorkerGroup) Start(ctx context.Context) {
 	go w.Deleter(ctx)
 	go w.AuditCleanup(ctx)
 	go w.Resources(ctx)
+	go w.AnalyticsWorker(ctx)
 }
 
 func sleepContext(ctx context.Context, d time.Duration) bool {

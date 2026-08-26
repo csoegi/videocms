@@ -1,13 +1,13 @@
 package controllers
 
 import (
+	"html/template"
 	"ch/kirari04/videocms/auth"
 	"ch/kirari04/videocms/helpers"
 	"ch/kirari04/videocms/models"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"log"
 	"math"
 	"net/http"
@@ -145,6 +145,32 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 		})
 	}
 
+	// --- Start Ad Decision Engine ---
+	var activeAd models.Advertisement
+
+	// Read  the configuration snapshot
+	snapshotConfig := h.Config()
+
+	// Determine if we should show ads: if AdsVisibility global setting is true and CMS user is non logged-in user, 
+	// logged-in users will send bypass_ads=true to skip ads)
+	showAds := snapshotConfig.AdsVisibility && c.QueryParam("bypass_ads") != "true"
+	
+	if showAds {
+		// Identify device category (mobile, desktop, tablet) based on User-Agent
+		device := helpers.GetDeviceCategory(c.Request().UserAgent())
+
+		// Query for a matching ad:
+		// 1. Matches the specific UserID of the video link owner (Tenant Isolation)
+		// 2. Is Active
+		// 3. Matches the device category or is set to 'all'
+		// 4. Sorted by Priority (High to Low), then Random
+		h.Deps.DB.Where("user_id = ? AND is_active = ? AND ads_device IN (?, 'all')", 
+			dbLink.UserID, true, device).
+			Order("ads_priority DESC, RANDOM()").
+			First(&activeAd)
+	}
+	// --- End Ad Decision Engine ---
+
 	rawQuality, _ := json.Marshal(jsonQualitys)
 	rawSubtitles, _ := json.Marshal(jsonSubtitles)
 	rawAudios, _ := json.Marshal(jsonAudios)
@@ -175,6 +201,9 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 		aspectHeight = 9
 	}
 
+	// Record the "view" event with all details for analytics (non-blocking, fire-and-forget)
+	h.Logic.RecordEvent("view", requestValidation.UUID, c.RealIP(), c.Request().UserAgent())
+
 	return c.Render(http.StatusOK, playerTemplate, echo.Map{
 		"Title":                        fmt.Sprintf("%s - %s", h.Config().AppName, dbLink.Name),
 		"Description":                  fmt.Sprintf("Watch %s on %s", dbLink.Name, h.Config().AppName),
@@ -199,6 +228,12 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 		"BaseUrl":                      h.Config().BaseUrl,
 		"DownloadEnabled":              downloadsEnabled,
 		"ContinueWatchingPopupEnabled": continueWatchingPopupEnabled,
+		// --- NEW ADS DATA ---
+		"HasAds":         				activeAd.ID > 0, // GORM ID > 0 means a record was found
+		"AdsType":        				activeAd.AdsType,
+		"AdsLink":        				activeAd.AdsLink,
+		"AdsDisplay":     				activeAd.AdsDisplay,
+		"AdsSkipSeconds": 				snapshotConfig.AdsSkipSeconds,
 	})
 }
 

@@ -4,3 +4,4 @@
 [submodule "videocms-frontend"]
 	path = videocms-frontend
 	url = https://github.com/csoegi/videocms-frontend.git
+	branch = main

@@ -99,4 +99,13 @@ type Setting struct {
 	MaxParallelDownloadPreparations   string `validate:"required,number,min=1,max=8"`
 	MaxQueuedDownloadPreparations     string `validate:"required,number,min=1,max=500"`
 	DownloadPreparationRetentionHours string `validate:"required,number,min=1,max=168"`
+	
+	// Ads settings
+	AdsVisibility  string `validate:"required,boolean" gorm:"size:5;default:false"` // enable or disable ads
+    AdsSkipSeconds string `validate:"required,number,min=0" gorm:"size:5;default:10"` // time in seconds before allowing users to skip ads
+
+	// Analytics settings
+	AnalyticsEnabled        string `validate:"required,boolean"` // enable or disable analytics tracking
+	AnalyticsLogDuration    string `validate:"required,number,min=1"` // time in days to keep analytics logs before they are purged
+	AnalyticsWorkerInterval string `validate:"required,number,min=1"` // interval in seconds for analytics worker to run and update the report
 }

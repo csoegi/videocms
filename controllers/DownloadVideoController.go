@@ -108,6 +108,8 @@ func (h *Handlers) DownloadVideoController(c echo.Context) error {
 		0,
 		uint64(fileInfo.Size()),
 	)
+	// Record the "download" event with all details for analytics (non-blocking, fire-and-forget)
+	h.Logic.RecordEvent("download", requestValidation.UUID, c.RealIP(), c.Request().UserAgent())
 
 	fileName := fmt.Sprintf("%s[%s].mp4", safeDownloadName(dbLink.Name), requestValidation.QUALITY)
 	c.Response().Header().Set("Accept-Ranges", "bytes")

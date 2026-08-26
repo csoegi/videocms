@@ -29,6 +29,8 @@ func Api(apiGroup *echo.Group, handlers *controllers.Handlers, middlewareFactory
 	apiGroup.GET("/file/example", handlers.GetFileExample)
 	apiGroup.GET("/p/pages", handlers.ListPublicWebPage)
 	apiGroup.GET("/p/page", handlers.GetPublicWebPage)
+	// Analytics tracking routes
+	apiGroup.POST("/analytics/stream/:UUID", handlers.LogStreamEvent) // streaming analytics event
 
 	// Routes that require to be authenticated
 	protectedApi := apiGroup.Group("",
@@ -89,6 +91,8 @@ func Api(apiGroup *echo.Group, handlers *controllers.Handlers, middlewareFactory
 	protectedApi.GET("/settings", handlers.GetSettings, middlewareFactory.IsAdmin())
 	protectedApi.PUT("/settings", handlers.UpdateSettings, middlewareFactory.IsAdmin())
 	protectedApi.POST("/settings/test-pgs-server", handlers.TestPgsServerConnection, middlewareFactory.IsAdmin())
+	protectedApi.GET("/stats/analytics", handlers.GetAnalyticsStats) // Get analytics stats, no admin required but requires analytics enabled
+	protectedApi.POST("/stats/analytics/refresh", handlers.RefreshAnalyticsStats) // Refresh analytics stats, no admin required but requires analytics enabled
 
 	protectedApi.GET("/users", handlers.GetUsers, middlewareFactory.IsAdmin())
 	protectedApi.POST("/users", handlers.CreateUser, middlewareFactory.IsAdmin())
@@ -127,6 +131,15 @@ func Api(apiGroup *echo.Group, handlers *controllers.Handlers, middlewareFactory
 	protectedApi.GET("/stats/remote-download/duration", handlers.GetAdminRemoteDownloadDurationStats, middlewareFactory.IsAdmin())
 	protectedApi.GET("/stats/remote-download/top", handlers.GetAdminTopRemoteDownloadStats, middlewareFactory.IsAdmin())
 
+    // Advertisements
+	ads := protectedApi.Group("/advertisements")
+	{
+		ads.GET("", handlers.AdvertisementList)
+		ads.POST("", handlers.AdvertisementCreate)
+		ads.PUT("/:id", handlers.AdvertisementUpdate)
+		ads.DELETE("/:id", handlers.AdvertisementDelete)
+	}
+	
 	uploadMiddlewares := []echo.MiddlewareFunc{
 		middleware.RateLimiterWithConfig(*middlewareFactory.LimiterConfig(rate.Limit(cfg.RatelimitRateUpload), cfg.RatelimitBurstUpload, time.Minute*5)),
 		middleware.BodyLimit(fmt.Sprintf("%dk", cfg.MaxUploadChunkSize/1024+1024)),
