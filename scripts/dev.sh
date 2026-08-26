@@ -51,16 +51,16 @@ trap 'exit 143' TERM
 require_command go
 require_command bun
 
-# if [[ ! -f "${frontend_dir}/package.json" ]]; then
-#     echo "Frontend submodule is missing. Run: git submodule update --init --recursive" >&2
-#     exit 1
-# fi
+if [[ ! -f "${frontend_dir}/package.json" ]]; then
+    echo "Frontend submodule is missing. Run: git submodule update --init --recursive" >&2
+    exit 1
+fi
 
-# echo "Installing frontend dependencies..."
-# (
-#     cd "${frontend_dir}"
-#     bun install --frozen-lockfile
-# )
+echo "Installing frontend dependencies..."
+(
+    cd "${frontend_dir}"
+    bun install --frozen-lockfile
+)
 
 echo "Starting Go backend at ${backend_origin}"
 (
