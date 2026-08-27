@@ -9,7 +9,7 @@ FROM --platform=$BUILDPLATFORM oven/bun:${BUN_VERSION} AS frontend_build
 WORKDIR /app
 
 ARG CHANNEL=beta
-ARG DOCKER_IMAGE_TAG=kirari04/videocms:beta
+ARG DOCKER_IMAGE_TAG=chrissoe/videocms:latest
 
 COPY videocms-frontend/package.json videocms-frontend/bun.lock ./
 RUN --mount=type=cache,target=/root/.bun/install/cache \
@@ -80,11 +80,11 @@ RUN apk add --no-cache ffmpeg bash
 
 ARG VERSION=v0.0.0-dev
 ARG CHANNEL=dev
-ARG DOCKER_IMAGE_TAG=kirari04/videocms:dev
+ARG DOCKER_IMAGE_TAG=chrissoe/videocms:latest
 
 LABEL org.opencontainers.image.title="VideoCMS" \
       org.opencontainers.image.description="Self-hosted video content management system" \
-      org.opencontainers.image.source="https://github.com/Kirari04/videocms" \
+      org.opencontainers.image.source="https://github.com/csoegi/videocms" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.ref.name="${DOCKER_IMAGE_TAG}" \
       ch.kirari04.videocms.channel="${CHANNEL}"
