@@ -228,12 +228,20 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 		"BaseUrl":                      h.Config().BaseUrl,
 		"DownloadEnabled":              downloadsEnabled,
 		"ContinueWatchingPopupEnabled": continueWatchingPopupEnabled,
-		// --- NEW ADS DATA ---
+		// --- Ads Settings ---
 		"HasAds":         				activeAd.ID > 0, // GORM ID > 0 means a record was found
 		"AdsType":        				activeAd.AdsType,
 		"AdsLink":        				activeAd.AdsLink,
 		"AdsDisplay":     				activeAd.AdsDisplay,
 		"AdsSkipSeconds": 				snapshotConfig.AdsSkipSeconds,
+		// --- Watermark Settings ---
+		"WatermarkEnabled":         	snapshotConfig.WatermarkEnabled,
+		"WatermarkType":        		snapshotConfig.WatermarkType,
+		"WatermarkText":        		snapshotConfig.WatermarkText,
+		"WatermarkImageLink":     		snapshotConfig.WatermarkImageLink,
+		"WatermarkPosition": 			snapshotConfig.WatermarkPosition,
+		"WatermarkMargin": 				snapshotConfig.WatermarkMargin,
+		"WatermarkTransparency": 		snapshotConfig.WatermarkTransparency,
 	})
 }
 

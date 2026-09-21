@@ -123,6 +123,15 @@ func LoadSnapshot(db *gorm.DB, base config.Config) (app.Snapshot, error) {
 	env.AnalyticsLogDuration = getEnvDb_int(&setting.AnalyticsLogDuration, 90)
 	env.AnalyticsWorkerInterval = getEnvDb_int(&setting.AnalyticsWorkerInterval, 60)
 
+	// Mapping Watermark Settings
+	env.WatermarkEnabled = *getEnvDb_bool(&setting.WatermarkEnabled, boolPtr(false))
+	env.WatermarkType = getEnvDb(&setting.WatermarkType, "text")
+	env.WatermarkText = getEnvDb(&setting.WatermarkText, "")
+	env.WatermarkImageLink = getEnvDb(&setting.WatermarkImageLink, "")
+	env.WatermarkPosition = getEnvDb(&setting.WatermarkPosition, "")
+	env.WatermarkMargin = getEnvDb_int(&setting.WatermarkMargin, 0)
+	env.WatermarkTransparency = getEnvDb_int(&setting.WatermarkTransparency, 0)
+
 	// validate config before saving
 	validate := validator.New(validator.WithRequiredStructEnabled())
 	err := validate.Struct(&setting)

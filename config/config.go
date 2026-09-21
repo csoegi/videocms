@@ -145,6 +145,15 @@ type Config struct {
 	AnalyticsEnabled        bool `env:"ANALYTICS_ENABLED" envDefault:"true"`
 	AnalyticsLogDuration    int  `env:"ANALYTICS_LOG_DURATION" envDefault:"90"`
 	AnalyticsWorkerInterval int  `env:"ANALYTICS_WORKER_INTERVAL" envDefault:"60"`
+
+	// Watermark Settings
+	WatermarkEnabled        bool `env:"WatermarkEnabled" envDefault:"false"`
+	WatermarkType    		string  `env:"WatermarkType" envDefault:"text"` // text | image
+	WatermarkText	 		string  `env:"WatermarkText" envDefault:""`
+	WatermarkImageLink	 	string  `env:"WatermarkImageLink" envDefault:""`
+	WatermarkPosition	 	string  `env:"WatermarkPosition" envDefault:""` // top_left | top_right | top_center | mid_left | mid_center | mid_right | bottom_left | bottom_center | bottom_right
+	WatermarkMargin	 		int  `env:"WatermarkMargin" envDefault:"0"`
+	WatermarkTransparency 	int  `env:"WatermarkTransparency" envDefault:"0"` // 0-100
 }
 
 type PublicConfig struct {

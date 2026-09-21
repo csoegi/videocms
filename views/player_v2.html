@@ -320,6 +320,45 @@
             z-index: 2147483647 !important;
         }
         .visible-flex { display: flex !important; }
+
+        /* --- Watermark Overlay Overlay Styles --- */
+        .watermark-overlay {
+            position: absolute;
+            z-index: 10;                  /* Layered over provider, beneath ad controls */
+            pointer-events: none;          /* Click-through transparent shield */
+            user-select: none;
+            display: flex;
+            max-width: 30%;
+            max-height: 25%;
+        }
+
+        .watermark-text {
+            font-family: var(--font-sans);
+            font-size: 30px;
+            font-weight: bold;
+            color: #ffffff;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.8), -1px -1px 2px rgba(0,0,0,0.8);
+            white-space: nowrap;
+        }
+
+        .watermark-image {
+            width: auto;
+            height: auto;
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+
+        /* Absolute Positioning Coordinates Matrix Mapping */
+        .wm-top_left     { top: var(--wm-margin); left: var(--wm-margin); }
+        .wm-top_center   { top: var(--wm-margin); left: 50%; transform: translateX(-50%); }
+        .wm-top_right    { top: var(--wm-margin); right: var(--wm-margin); }
+        .wm-mid_left     { top: 50%; left: var(--wm-margin); transform: translateY(-50%); }
+        .wm-mid_center   { top: 50%; left: 50%; transform: translate(-50%, -50%); }
+        .wm-mid_right    { top: 50%; right: var(--wm-margin); transform: translateY(-50%); }
+        .wm-bottom_left  { bottom: var(--wm-margin); left: var(--wm-margin); }
+        .wm-bottom_center{ bottom: var(--wm-margin); left: 50%; transform: translateX(-50%); }
+        .wm-bottom_right { bottom: var(--wm-margin); right: var(--wm-margin); }
     </style>
 </head>
 <body>
@@ -340,6 +379,19 @@
             </media-provider>
             
             <media-video-layout></media-video-layout>
+            <!-- Video Watermark Overlay -->
+            {{ if .WatermarkEnabled }}
+            <div class="watermark-overlay wm-{{ .WatermarkPosition }}" 
+                style="--wm-margin: {{ .WatermarkMargin }}px; opacity: calc((100 - {{ .WatermarkTransparency }}) / 100);">
+                
+                {{ if eq .WatermarkType "image" }}
+                    <img src="{{ .WatermarkImageLink }}" class="watermark-image" alt="Watermark" />
+                {{ else }}
+                    <span class="watermark-text">{{ .WatermarkText }}</span>
+                {{ end }}
+                
+            </div>
+            {{ end }}
         </media-player>
         {{ else }}
         <img class="encoding-poster" src="{{ .Thumbnail }}" alt="" />

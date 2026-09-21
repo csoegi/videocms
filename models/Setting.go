@@ -108,4 +108,13 @@ type Setting struct {
 	AnalyticsEnabled        string `validate:"required,boolean"` // enable or disable analytics tracking
 	AnalyticsLogDuration    string `validate:"required,number,min=1"` // time in days to keep analytics logs before they are purged
 	AnalyticsWorkerInterval string `validate:"required,number,min=1"` // interval in seconds for analytics worker to run and update the report
+
+	// Watermark settings
+	WatermarkEnabled        string `validate:"required,boolean"` // enable or disable analytics tracking
+	WatermarkType    		string
+	WatermarkText 			string
+	WatermarkImageLink    	string
+	WatermarkPosition 		string
+	WatermarkMargin    		string `validate:"required,number,min=0"`
+	WatermarkTransparency 	string `validate:"required,number,min=0"`
 }
