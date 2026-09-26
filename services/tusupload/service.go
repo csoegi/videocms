@@ -12,7 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
-
+	"encoding/json" 
+	
 	"ch/kirari04/videocms/app"
 	"ch/kirari04/videocms/config"
 	"ch/kirari04/videocms/logic"
@@ -40,7 +41,17 @@ const (
 	apiKeyIDContextKey contextKey = "videocms_tus_api_key_id"
 )
 
-type createFileFunc func(fromFile *string, toFolder uint, fileName string, fileID string, fileSize int64, userID uint, excludeSessionUUID string) (int, *models.Link, bool, error)
+type createFileFunc func(
+	fromFile *string, 
+	toFolder uint, 
+	fileName string, 
+	fileID string, 
+	fileSize int64, 
+	userID uint, 
+	excludeSessionUUID string,
+	subtitleMode string,  
+	externalSubs []models.Subtitle,
+) (int, *models.Link, bool, error)
 
 type Service struct {
 	Deps  *app.Deps
@@ -147,6 +158,7 @@ func (s *Service) ensureHandler() error {
 		NotifyTerminatedUploads: true,
 		UploadProgressInterval:  time.Second,
 		PreUploadCreateCallback: s.preUploadCreate,
+		RespectForwardedHeaders: true,
 	})
 	if err != nil {
 		return err
@@ -445,6 +457,13 @@ func (s *Service) preUploadCreate(hook tusd.HookEvent) (tusd.HTTPResponse, tusd.
 
 	tusID := uuid.NewString()
 	expiresAt := time.Now().Add(retentionPeriod)
+
+	subtitleMode := strings.TrimSpace(info.MetaData["subtitle_mode"])
+	if subtitleMode == "" {
+		subtitleMode = "none"
+	}
+	selectedSubForBurn := strings.TrimSpace(info.MetaData["selected_sub_for_burn"])
+
 	session := models.UploadSession{
 		UUID:             uuid.NewString(),
 		ClientUploadUUID: clientUploadUUID,
@@ -460,6 +479,10 @@ func (s *Service) preUploadCreate(hook tusd.HookEvent) (tusd.HTTPResponse, tusd.
 		ParentFolderID:   parentFolderID,
 		UserID:           userID,
 		ExpiresAt:        &expiresAt,
+		// 🌟 ADDED SUBTITLES
+		SubtitleMode:        subtitleMode,
+		SelectedSubForBurn:  selectedSubForBurn,
+		StagedSubtitlesJSON: "[]", // Sets a clean initial default empty JSON string
 	}
 
 	if err := db.Transaction(func(tx *gorm.DB) error {
@@ -512,6 +535,9 @@ func (s *Service) preUploadCreate(hook tusd.HookEvent) (tusd.HTTPResponse, tusd.
 	metadata["filename"] = name
 	metadata["parent_folder_id"] = strconv.FormatUint(uint64(parentFolderID), 10)
 	metadata["client_upload_uuid"] = clientUploadUUID
+	// Include Subtitle metadata in response
+	metadata["subtitle_mode"] = subtitleMode
+	metadata["selected_sub_for_burn"] = selectedSubForBurn
 
 	return tusd.HTTPResponse{
 			Header: tusd.HTTPHeader{
@@ -876,12 +902,41 @@ func (s *Service) Finalize(uploadID string, userID uint) (int, *models.Link, err
 		return http.StatusInternalServerError, nil, echo.ErrInternalServerError
 	}
 
-	status, link, cloned, err := s.createFile(&destinationPath, session.ParentFolderID, session.Name, fileUUID, session.Size, userID, session.ClientUploadUUID)
+	// Extract subtitle meta from session
+	var subtitleMode string = "none"
+	var externalSubs []models.Subtitle 
+	subtitleMode = session.SubtitleMode
+
+	if session.StagedSubtitlesJSON != "" && session.StagedSubtitlesJSON != "[]" {
+		// Unmarshal session metadata into Subtitle externalSubs
+		if err := json.Unmarshal([]byte(session.StagedSubtitlesJSON), &externalSubs); err != nil {
+			log.Printf("Failed to decode staged subtitles JSON: %v", err)
+		}
+	}
+
+	if subtitleMode == "" {
+		subtitleMode = "none"
+	}
+
+	// Create video file and subtitles
+	status, link, cloned, err := s.createFile(
+		&destinationPath, 
+		session.ParentFolderID, 
+		session.Name, 
+		fileUUID, 
+		session.Size, 
+		userID, 
+		session.ClientUploadUUID,
+		subtitleMode,
+		externalSubs,
+	)
+
 	if err != nil {
 		_ = os.Remove(destinationPath)
 		s.failFinalize(&session, err.Error())
 		return status, nil, err
 	}
+
 	if cloned {
 		_ = os.Remove(destinationPath)
 	}

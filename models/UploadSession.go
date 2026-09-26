@@ -49,6 +49,10 @@ type UploadSession struct {
 	FinalizedAt      *time.Time
 	Error            string       `gorm:"size:1000;"`
 	UploadParts      []UploadPart `gorm:"foreignKey:UploadSessionID" json:"-"`
+	// Added Subtitles
+	SubtitleMode 		string
+	SelectedSubForBurn 	string
+	StagedSubtitlesJSON string
 }
 
 type UploadPart struct {
@@ -73,4 +77,8 @@ type UploadSessionsGetResponse struct {
 	PartCount        int        `json:"PartCount"`
 	Status           string     `json:"Status"`
 	ExpiresAt        *time.Time `json:"ExpiresAt"`
+	// Added Subtitles
+	SubtitleMode        string `json:"SubtitleMode"`
+	SelectedSubForBurn  string `json:"SelectedSubForBurn"`
+	StagedSubtitlesJSON string `json:"StagedSubtitlesJSON"`
 }

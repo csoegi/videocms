@@ -5,6 +5,7 @@ import (
 	"ch/kirari04/videocms/middlewares"
 	"fmt"
 	"time"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -126,6 +127,14 @@ func Api(apiGroup *echo.Group, handlers *controllers.Handlers, middlewareFactory
 	protectedApi.GET("/account/remote-download/duration", handlers.GetRemoteDownloadDurationStats)
 	protectedApi.GET("/account/remote-download/top", handlers.GetTopRemoteDownloadStats)
 
+	// Subtitles - Staging Subtitle Data During TUS Upload
+	protectedApi.POST("/subtitle/upload", handlers.SubtitleUploadController)
+
+	// Subtitles - Post-Upload Subtitle Management in Video Details Panel 
+	protectedApi.POST("/video/:uuid/subtitles/upload", handlers.AddSubtitleTrackDirect)
+	protectedApi.POST("/video/:uuid/subtitles/config", handlers.UpdateVideoSubtitleConfig)
+	protectedApi.DELETE("/video/:uuid/subtitles/track/:sub_uuid", handlers.DeleteSubtitleTrackDirect)
+	
 	// Admin Stats
 	protectedApi.GET("/stats/remote-download", handlers.GetAdminRemoteDownloadStats, middlewareFactory.IsAdmin())
 	protectedApi.GET("/stats/remote-download/duration", handlers.GetAdminRemoteDownloadDurationStats, middlewareFactory.IsAdmin())
@@ -140,10 +149,38 @@ func Api(apiGroup *echo.Group, handlers *controllers.Handlers, middlewareFactory
 		ads.DELETE("/:id", handlers.AdvertisementDelete)
 	}
 	
+	// Local Development Fix for TUS Upload falling back from localhost:3000 to 127.0.0.1:3000 
+	// Browser rejects the cross-origin/mismatched IP handshake layer causing net::ERR_CONNECTION_REFUSED.
+	tusLocationFixMiddleware := func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			// 1. Let the native Tus handler run and execute its creation logic hooks first
+			err := next(c)
+			
+			// 2. Intercept the outbound response headers before they clear port 3000
+			location := c.Response().Header().Get("Location")
+			if location != "" {
+				// If the library generated an absolute path using the fallback IP
+				if strings.Contains(location, "127.0.0.1:3000") {
+					// Strip the absolute domain completely and format as a safe relative tracking path!
+					relativeLocation := strings.Replace(location, "http://127.0.0.1:3000", "", 1)
+					c.Response().Header().Set("Location", relativeLocation)
+				} else if strings.Contains(location, "http://") {
+					// Fallback guard: if it generates any other absolute host domain layout string,
+					// split it at the BasePath pattern to isolate the trailing session token
+					splits := strings.Split(location, "/api/uploads/")
+					if len(splits) > 1 {
+						c.Response().Header().Set("Location", "/api/uploads/"+splits[1])
+					}
+				}
+			}
+			return err
+		}
+	}
+
 	uploadMiddlewares := []echo.MiddlewareFunc{
 		middleware.RateLimiterWithConfig(*middlewareFactory.LimiterConfig(rate.Limit(cfg.RatelimitRateUpload), cfg.RatelimitBurstUpload, time.Minute*5)),
 		middleware.BodyLimit(fmt.Sprintf("%dk", cfg.MaxUploadChunkSize/1024+1024)),
 	}
-	apiGroup.Any("/uploads", handlers.TusUpload, uploadMiddlewares...)
-	apiGroup.Any("/uploads/*", handlers.TusUpload, uploadMiddlewares...)
+	apiGroup.Any("/uploads", handlers.TusUpload, append(uploadMiddlewares, tusLocationFixMiddleware)...)
+	apiGroup.Any("/uploads/*", handlers.TusUpload, append(uploadMiddlewares, tusLocationFixMiddleware)...)
 }

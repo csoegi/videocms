@@ -18,6 +18,10 @@ type File struct {
 	Subtitles    []Subtitle `json:"-"`
 	Audios       []Audio    `json:"-"`
 	Links        []Link     `json:"-"`
+
+	// --- Soft/Hard burning subtitles
+	// Modes: "none" (no subtitles/nothing uploaded), "soft" (togglable CC tracks), "hard" (burned-in pixels)
+	SubtitleMode string `gorm:"type:varchar(10);default:'none'" json:"subtitle_mode"`
 }
 
 type FileCreateValidation struct {

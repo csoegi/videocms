@@ -774,26 +774,40 @@
             fetch(`/api/analytics/stream/${UUID}`, { method: 'POST' });
         }, { once: true });
 
-        // --- Setup Subtitles ---
-        const provider = document.querySelector('media-provider');
-        let trackCount = 0;
-        
-        Subtitles.forEach((sub, index) => {
-            // Drop ASS
-            if (sub.type === 'ass') return;
-
-            const blob = new Blob([b64DecodeUnicode(sub.data)], { type: 'text/vtt' });
-            const url = URL.createObjectURL(blob);
+        // --- 🌟 Setup Subtitles ---
+        const trackInjectorInterval = setInterval(() => {
+            const player = document.querySelector('media-player');
             
-            const track = document.createElement('track');
-            track.kind = 'subtitles'; // or 'captions'
-            track.label = `${sub.name} (${sub.lang})`;
-            track.srclang = sub.lang;
-            track.src = url;
-                    
-            provider.appendChild(track);
-            trackCount++;
-        });
+            if (player && player.textTracks) {
+                clearInterval(trackInjectorInterval); 
+                console.log("[Views->Player_v2] [INFO] Found subtitle tracks. Injecting tracks safely...");
+
+                if (typeof Subtitles !== 'undefined' && Array.isArray(Subtitles)) {
+                    Subtitles.forEach((sub, index) => {
+                        if (sub.type === 'ass') return;
+
+                        try {
+                            const blob = new Blob([b64DecodeUnicode(sub.data)], { type: 'text/vtt' });
+                            const url = URL.createObjectURL(blob);
+                            
+                            player.textTracks.add({
+                                kind: 'subtitles',
+                                label: `${sub.name} (${sub.lang.toUpperCase()})`,
+                                src: url,
+                                srclang: sub.lang,
+                                type: 'vtt',
+                                // Force the first track or default track row to activate natively on screen
+                                default: sub.is_default === 'true' || index === 0
+                            });
+                            
+                            console.log(`[Views->Player_v2] [INFO] Track is successfully loaded: ${sub.name}`);
+                        } catch (err) {
+                            console.error("[Views->Player_v2] [INFO] Failed to inject track:", err);
+                        }
+                    });
+                }
+            }
+        }, 100);
 
         // --- Webhooks Logic ---
         function activateWebhooks() {

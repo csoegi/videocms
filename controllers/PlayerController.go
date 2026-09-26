@@ -7,6 +7,7 @@ import (
 	"ch/kirari04/videocms/models"
 	"encoding/base64"
 	"encoding/json"
+	"path/filepath"
 	"fmt"
 	"log"
 	"math"
@@ -65,6 +66,25 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 		return c.Render(http.StatusNotFound, "404.html", echo.Map{})
 	}
 
+	// 🌟 Load Subtitle tracks
+	targetFileID := dbLink.FileID
+	if targetFileID == 0 && dbLink.File.ID > 0 {
+		targetFileID = dbLink.File.ID
+	}
+
+	if targetFileID > 0 {
+		var explicitSubtitles []models.Subtitle
+		// Pull all ready text track streams matching this parent video model ID
+		if errSub := h.Deps.DB.Where("file_id = ?", targetFileID).Find(&explicitSubtitles).Error; errSub == nil {
+			// Overwrite the subtitles list framework dynamically in memory
+			dbLink.File.Subtitles = explicitSubtitles
+			
+			log.Printf("[PlayerController] [SUCCESS] Successfully loaded %d soft subtitle tracks for File ID: %d", len(explicitSubtitles), targetFileID)
+		}
+	} else {
+		log.Printf("[PlayerController] [ERROR] Player controller could not resolve a valid File ID for link UUID: %s", dbLink.UUID)
+	}
+
 	if !h.playerCaptchaAllowed(c) {
 		return c.Redirect(http.StatusSeeOther, "/captcha/challenge?uuid="+dbLink.UUID)
 	}
@@ -97,20 +117,33 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 		}
 	}
 
-	// List subtitles
-	for _, subItem := range dbLink.File.Subtitles {
-		if subItem.Ready {
-			subPath := fmt.Sprintf("%s/%s/%s/%s", h.Config().FolderVideoQualitysPriv, dbLink.File.UUID, subItem.UUID, subItem.OutputFile)
-			if subContent, err := os.ReadFile(subPath); err == nil {
-				jsonSubtitles = append(jsonSubtitles, map[string]string{
-					"data": base64.StdEncoding.EncodeToString(subContent),
-					"type": subItem.Type,
-					"name": subItem.Name,
-					"lang": subItem.Lang,
-				})
+	// 🌟 Load ONLY soft-burned subtitle tracks, hard-burned subtitle is already baked into the video
+	if dbLink.File.SubtitleMode != "hard" {
+		for _, subItem := range dbLink.File.Subtitles {
+			if subItem.Ready {
+				
+				subPath := filepath.Join(subItem.Path, subItem.OutputFile)
+				
+				if subContent, err := os.ReadFile(subPath); err == nil {
+					subText := string(subContent)
+					isSRT := strings.HasSuffix(strings.ToLower(subItem.OutputFile), ".srt")
+
+					if isSRT && !strings.HasPrefix(subText, "WEBVTT") {
+						subText = "WEBVTT\n\n" + strings.ReplaceAll(subText, ",", ".")
+					}
+
+					jsonSubtitles = append(jsonSubtitles, map[string]string{
+						"data": base64.StdEncoding.EncodeToString([]byte(subText)),
+						"type": "vtt", 
+						"name": subItem.Name,
+						"lang": subItem.Lang,
+					})
+				} else {
+					log.Printf("[PlayerController] [ERROR] Player failed to load subtitle file at: %s, Error: %v", subPath, err)
+				}
 			}
 		}
-	}
+	} 
 
 	// List audios
 	for _, audioItem := range dbLink.File.Audios {

@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,7 +23,17 @@ import (
 	"gorm.io/gorm"
 )
 
-func (s *Service) CreateFile(fromFile *string, toFolder uint, fileName string, fileId string, fileSize int64, userId uint, excludeSessionUUID string) (status int, newFile *models.Link, cloned bool, err error) {
+func (s *Service) CreateFile(
+	fromFile *string, 
+	toFolder uint, 
+	fileName string, 
+	fileId string, 
+	fileSize int64, 
+	userId uint, 
+	excludeSessionUUID string,
+	subtitleMode string,                 
+	externalSubs []models.Subtitle,
+) (status int, newFile *models.Link, cloned bool, err error) {
 	//check if requested folder exists (if set)
 	if toFolder > 0 {
 		res := s.Deps.DB.First(&models.Folder{}, toFolder)
@@ -76,8 +87,9 @@ func (s *Service) CreateFile(fromFile *string, toFolder uint, fileName string, f
 		// return http.StatusInternalServerError, nil, false, echo.ErrInternalServerError
 		return http.StatusBadRequest, nil, false, errors.New("Invalid data found when processing video")
 	}
-	// proobe type
+	// probe type
 	dataStreams := data.StreamType(ffprobe.StreamAny)
+	// extract internal subtitles from stream
 	dataSubtitleStreams := data.StreamType(ffprobe.StreamSubtitle)
 	// declare needed informations
 	var videoStream ffprobe.Stream
@@ -188,6 +200,7 @@ func (s *Service) CreateFile(fromFile *string, toFolder uint, fileName string, f
 			Duration:     videoDuration,
 			AvgFrameRate: avgFramerate,
 			Size:         fileSize,
+			SubtitleMode: subtitleMode, 
 		}
 		if err := tx.Create(&dbFile).Error; err != nil {
 			return err
@@ -208,7 +221,16 @@ func (s *Service) CreateFile(fromFile *string, toFolder uint, fileName string, f
 		return http.StatusInternalServerError, nil, false, echo.ErrInternalServerError
 	}
 
-	// save subtitle data to database so they can be converted later
+	// === STEP 1: Save internal subtitle to database
+	// If the video container contains embedded subtitle track streams,
+	// set the video subtitle mode to "soft"
+	if len(subtitleStreams) > 0 {
+		dbFile.SubtitleMode = "soft"
+		if errUpdateMode := s.Deps.DB.Model(&dbFile).Update("subtitle_mode", "soft").Error; errUpdateMode != nil {
+			log.Printf("[Logic->CreateFile] [ERROR] Failed to set initial video SubtitleMode to soft: %v", errUpdateMode)
+		}
+	}
+
 	for index, subtitleStream := range subtitleStreams {
 		// generate subtitle name
 		var subtitleName = fmt.Sprintf("Subtitle %v", index+1)
@@ -222,7 +244,6 @@ func (s *Service) CreateFile(fromFile *string, toFolder uint, fileName string, f
 			subtitleLang = autoLang
 		}
 
-		// log.Printf("subtitleName: %s / subtitleLang: %s", subtitleStream.Tags.Title, subtitleStream.Tags.Language)
 		for _, subOpt := range models.AvailableSubtitles {
 			// generate unique identifier for subtitle
 			subtitleId := uuid.NewString()
@@ -232,27 +253,88 @@ func (s *Service) CreateFile(fromFile *string, toFolder uint, fileName string, f
 				UUID:          subtitleId,
 				Name:          subtitleName,
 				Lang:          subtitleLang,
-				Index:         index,
+				Index:         index, // Set index for internal subtitle required for transcoding
 				Codec:         subOpt.Codec,
 				Type:          subOpt.Type,
 				OutputFile:    subOpt.OutputFile,
 				FileID:        dbFile.ID,
 				Path:          fmt.Sprintf("%s/%s/%s", s.Config().FolderVideoQualitysPriv, dbFile.UUID, subtitleId),
 				OriginalCodec: subtitleStream.CodecName,
+				Source:        "internal", // Set to "internal"
 				Encoding:      false,
 				Failed:        false,
 				Ready:         false,
 				Error:         "",
 			}
 			if res := s.Deps.DB.Create(&dbSubtitle); res.Error != nil {
-				log.Printf("Error saving Subtitle in database: %v", res.Error)
+				log.Printf("[Logic->CreateFile] [ERROR] Error saving Internal Subtitle in database: %v", res.Error)
 				return http.StatusInternalServerError, nil, false, echo.ErrInternalServerError
 			}
 		}
-
 	}
 
-	// save audio data to database so they can be converted later
+	// === STEP 2: Save external subtitles to disk and database
+	for _, extSub := range externalSubs {
+		nameSplits := strings.Split(extSub.Name, ".")
+		ext := "vtt"
+		if len(nameSplits) > 1 {
+			ext = strings.ToLower(nameSplits[len(nameSplits)-1])
+		}
+		
+		baseQualityDir := filepath.ToSlash(s.Config().FolderVideoQualitysPriv)
+		tempStagingPath := filepath.ToSlash(extSub.Path) // 💡 Now contains the true staging path decoded from JSON!
+
+		// Build the true multi-track subfolder hierarchy targets
+		productionSubDir := fmt.Sprintf("%s/%s/%s", baseQualityDir, dbFile.UUID, extSub.UUID)
+		targetOutputName := fmt.Sprintf("%s.%s", extSub.UUID, ext)
+		finalDiskFilePath := fmt.Sprintf("%s/%s", productionSubDir, targetOutputName)
+
+		if err := os.MkdirAll(productionSubDir, 0755); err != nil {
+			log.Printf("[Logic->CreateFile] [ERROR] Failed to create subtitle subdirectory path: %v", err)
+			continue
+		}
+
+		// Read the temp text asset file cleanly using the decoded path variable string
+		subBytes, errRead := os.ReadFile(tempStagingPath)
+		if errRead != nil {
+			log.Printf("[Logic->CreateFile] [ERROR] Failed to read temporary staging subtitle file track at %s: %v", tempStagingPath, errRead)
+			continue
+		}
+
+		// Write the processed asset file out directly inside the quality subfolder partition
+		if errWrite := os.WriteFile(finalDiskFilePath, subBytes, 0644); errWrite != nil {
+			log.Printf("[Logic->CreateFile] [ERROR] Failed to write subtitle file to quality folder: %v", errWrite)
+			continue
+		}
+		
+		// Clean up the temporary upload staging file track asset safely
+		_ = os.Remove(tempStagingPath)
+
+		// Update the database records fields
+		errUpdate := s.Deps.DB.Model(&models.Subtitle{}).
+			Where("uuid = ?", extSub.UUID).
+			Updates(map[string]interface{}{
+				"file_id":           dbFile.ID,          
+				"output_file":       targetOutputName,   
+				"codec":             "vtt",
+				"original_codec":    ext,
+				"source":            "external", // Set to "external"
+				"index":             -1, // Default index for external
+				"path":              productionSubDir,   			
+				"ready":             true, // Unlock visibility immediately
+				"encoding":          false,
+				"failed":            false,
+				"progress":          100.0,
+			}).Error
+
+		if errUpdate != nil {
+			log.Printf("[Logic->CreateFile] [ERROR] Failed saving subtitle: %v", errUpdate)
+		} else {
+			log.Printf("[Logic->CreateFile] [SUCCESS] Subtitle track %s is successfully saved: %s", extSub.UUID, finalDiskFilePath)
+		}
+	}
+
+	// === STEP 3: Save audio data to database so they can be converted later
 	for index, audioStream := range audioStreams {
 		// generate  audio name
 		var audioName = fmt.Sprintf("Audio %v", index+1)
@@ -294,7 +376,7 @@ func (s *Service) CreateFile(fromFile *string, toFolder uint, fileName string, f
 		}
 	}
 
-	// add qualitys to database so they can be converted later
+	// === STEP 4: Save video qualitys to database so they can be converted later
 	for _, qualityOpt := range s.Qualities() {
 		if !qualityOpt.Enabled {
 			continue

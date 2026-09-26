@@ -20,9 +20,11 @@ type GetFileRespQuali struct {
 	Size         int64
 }
 type GetFileRespSub struct {
+	UUID  string
 	Name  string
 	Type  string
 	Lang  string
+	Codec string
 	Ready bool
 }
 type GetFileRespAudio struct {
@@ -41,12 +43,14 @@ type GetFileResp struct {
 	ID              uint
 	UUID            string
 	Name            string
+	FileUUID		string
 	Thumbnail       string
 	CustomThumbnail bool
 	ParentFolderID  uint
 	Size            int64
 	Duration        float64
 	Qualitys        []GetFileRespQuali
+	SubtitleMode    string
 	Subtitles       []GetFileRespSub
 	Audios          []GetFileRespAudio
 	Tags            []GetFileRespTag
@@ -95,9 +99,11 @@ func (s *Service) GetFile(LinkID uint, userID uint, isAdmin bool) (status int, f
 	Subtitles := make([]GetFileRespSub, 0)
 	for _, Subtitle := range link.File.Subtitles {
 		Subtitles = append(Subtitles, GetFileRespSub{
+			UUID:  Subtitle.UUID,
 			Name:  Subtitle.Name,
 			Lang:  Subtitle.Lang,
 			Type:  Subtitle.Type,
+			Codec: Subtitle.Codec,
 			Ready: Subtitle.Ready,
 		})
 	}
@@ -129,9 +135,11 @@ func (s *Service) GetFile(LinkID uint, userID uint, isAdmin bool) (status int, f
 		Thumbnail:       s.ResolvedThumbnailURL(link),
 		CustomThumbnail: link.Thumbnail != "",
 		ParentFolderID:  link.ParentFolderID,
+		FileUUID:		 link.File.UUID,
 		Size:            link.File.Size,
 		Duration:        link.File.Duration,
 		Qualitys:        Qualitys,
+		SubtitleMode:	 link.File.SubtitleMode,
 		Subtitles:       Subtitles,
 		Audios:          Audios,
 		Tags:            Tags,

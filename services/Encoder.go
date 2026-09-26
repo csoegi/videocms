@@ -88,8 +88,8 @@ func (w *WorkerGroup) ResetEncodingState() {
 func (w *WorkerGroup) loadEncodingTasks(ctx context.Context) {
 	var encodingTasks []EncodingTask
 
-	// we want to encode the subtitles first, then audio and in the end the qualities
 	// SUBTITLES
+	// we want to encode the subtitles first, then audio and in the end the qualities
 	var encodingSubs []models.Subtitle
 	w.deps.DB.
 		Model(&models.Subtitle{}).
@@ -99,6 +99,8 @@ func (w *WorkerGroup) loadEncodingTasks(ctx context.Context) {
 			Ready:    false,
 			Failed:   false,
 		}, "Encoding", "Ready", "Failed").
+		// 🌟 Exclude external subtitles from encoding
+		Not("source = ?", "external"). 
 		Order("id ASC").
 		Limit(10).
 		Find(&encodingSubs)
@@ -211,6 +213,22 @@ func (w *WorkerGroup) runEncode(ctx context.Context, encodingTaskInformation Enc
 }
 
 func (w *WorkerGroup) runEncodeQuality(ctx context.Context, encodingTask models.Quality) {
+	// Explicitly re-query and reload the parent File relation data structures natively
+	// to ensure all path variables are fully populated after queue resets!
+	var activeFile models.File
+	if errFile := w.deps.DB.Where("id = ?", encodingTask.FileID).First(&activeFile).Error; errFile == nil {
+		encodingTask.File = activeFile
+		//log.Printf("[Services->Encoder->runEncodeQuality] [SUCCESS] Successfully reloaded master video file: %s", encodingTask.File.Path)
+	} else {
+		log.Printf("[Services->Encoder->runEncodeQuality] [ERROR] Failed to load parent file metadata for FileID: %d, Error: %v", encodingTask.FileID, errFile)
+		encodingTask.Ready = false
+		encodingTask.Encoding = false
+		encodingTask.Failed = true
+		encodingTask.Error = "Failed to resolve master parent file record row properties"
+		w.deps.DB.Save(&encodingTask)
+		return
+	}
+	
 	// we check if the original file has been deleted during the waittime
 	if !w.originalFileExists(encodingTask.FileID) {
 		encodingTask.Ready = false
@@ -236,6 +254,40 @@ func (w *WorkerGroup) runEncodeQuality(ctx context.Context, encodingTask models.
 	absFolderOutput, _ := filepath.Abs(encodingTask.Path)
 	encFilePath := fmt.Sprintf("%s/%s", absFolderOutput, encodingTask.OutputFile)
 
+	// 🌟 Prepare hard-burn subtitle
+	var videoFilterArgs string = fmt.Sprintf("-s %dx%d", encodingTask.Width, encodingTask.Height)
+
+	if encodingTask.File.SubtitleMode == "hard" {
+		var burnSubtitle models.Subtitle
+		err := w.deps.DB.Where("file_id = ? AND selected_for_burn = ?", encodingTask.FileID, true).First(&burnSubtitle).Error
+		if err == nil && burnSubtitle.Path != "" && burnSubtitle.OutputFile != "" {
+			
+			// Combine the clean directory path column with the exact outputFile name 
+			// so FFmpeg targets the true physical text file, not an empty directory shell!
+			rawSubFilePath := filepath.Join(burnSubtitle.Path, burnSubtitle.OutputFile)
+			absSubPath, subErr := filepath.Abs(rawSubFilePath)
+			
+			if subErr == nil {
+				// 💡 WSL & CROSS-PLATFORM PATH ESCAPING PARITY ENGINE:
+				// Protect colons, quotes, and normalize slash directions so FFmpeg 
+				// parses the absolute disk path successfully across Linux/Windows mounts!
+				escapedSubPath := strings.ReplaceAll(absSubPath, "\\", "/")
+				escapedSubPath = strings.ReplaceAll(escapedSubPath, "'", "'\\\\''")
+				escapedSubPath = strings.ReplaceAll(escapedSubPath, ":", "\\:")
+				
+				// Append the subtitle overlay rendering parameter natively into the video filter pipeline
+				videoFilterArgs = fmt.Sprintf("-vf \"scale=%d:%d,subtitles='%s'\"", encodingTask.Width, encodingTask.Height, escapedSubPath)
+				
+				log.Printf("[Services->Encoder->runEncodeQuality] [SUCCESS] Hard burn target successfully set to: %s", escapedSubPath)
+			}
+		} else {
+			log.Printf("[Services->Encoder->runEncodeQuality] [ERROR] Hard burn requested but no valid ready subtitle was linked to File ID: %d", encodingTask.FileID)
+		}
+	} else {
+		// Default standard clean scaling argument if no hard-burn is selected
+		videoFilterArgs = fmt.Sprintf("-s %dx%d", encodingTask.Width, encodingTask.Height)
+	}
+
 	var ffmpegCommand string = "echo Encoding type didnt match && exit 1"
 	switch encodingTask.Type {
 	case "hls":
@@ -254,7 +306,7 @@ func (w *WorkerGroup) runEncodeQuality(ctx context.Context, encodingTask models.
 			fmt.Sprintf("%s ", frameRateString) + // (optional) setting framerate
 			fmt.Sprintf("-force_key_frames \"expr:gte(t,n_forced*%d)\" ", segmenDuration) + // force keyframes every segmentDuration
 			"-flags +cgop " + // closed GOP
-			fmt.Sprintf("-s %dx%d ", encodingTask.Width, encodingTask.Height) + // setting resolution
+			fmt.Sprintf("%s ", videoFilterArgs) + // 🌟 Inject soft-burn (-s) OR hard-burn subtitle argument (-vf)
 			fmt.Sprint("-sc_threshold 0 ") +
 			"-f hls " + // hls playlist
 			fmt.Sprintf("-hls_time %d ", segmenDuration) + // segment duration
@@ -414,6 +466,20 @@ func (w *WorkerGroup) runEncodeAudio(ctx context.Context, encodingTask models.Au
 }
 
 func (w *WorkerGroup) runEncodeSub(ctx context.Context, encodingTask models.Subtitle) {
+
+	// 🌟 Exclude external subtitles from FFmpeg stream extractions.	
+	if encodingTask.Source == "external" {
+		encodingTask.Encoding = false
+		encodingTask.Ready = true // Set to ready status
+		encodingTask.Failed = false
+		encodingTask.Progress = 100.0
+		encodingTask.Error = ""
+		
+		w.deps.DB.Save(&encodingTask)
+		//log.Printf("[Services->Encoder->runEncodeSub] Auto exclude external soft subtitle track UUID: %s", encodingTask.UUID)
+		return
+	}
+
 	// we check if the original file has been deleted during the waittime
 	if !w.originalFileExists(encodingTask.FileID) {
 		encodingTask.Ready = false

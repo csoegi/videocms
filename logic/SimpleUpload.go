@@ -13,7 +13,15 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-func (s *Service) SimpleUpload(parentFolderID uint, name string, file io.Reader, fileSize int64, userID uint) (status int, response *models.Link, err error) {
+func (s *Service) SimpleUpload(
+	parentFolderID uint, 
+	name string, 
+	file io.Reader, 
+	fileSize int64, 
+	userID uint,
+	subtitleMode string,                 
+	externalSubs []models.Subtitle, // 💡 Native model slice passed cleanly from the controller
+) (status int, response *models.Link, err error) {
 	// check if user is blocked by another asynchronous user operation
 	if s.Deps.RequestGate.Blocked(userID) {
 		return http.StatusTooManyRequests, nil, errors.New("wait until the previous delete request finished")
@@ -56,7 +64,7 @@ func (s *Service) SimpleUpload(parentFolderID uint, name string, file io.Reader,
 		return http.StatusBadRequest, nil, fmt.Errorf("exceeded max upload sessions")
 	}
 
-	// create temp file
+	// create temp file for the video
 	uploadUUID := uuid.NewString()
 	tempPath := fmt.Sprintf("%s/%s.tmp", s.Config().FolderVideoUploadsPriv, uploadUUID)
 	dst, err := os.Create(tempPath)
@@ -65,14 +73,14 @@ func (s *Service) SimpleUpload(parentFolderID uint, name string, file io.Reader,
 		return http.StatusInternalServerError, nil, echo.ErrInternalServerError
 	}
 
-	// ensure cleanup if something fails before CreateFile
+	// 💡 Purges the main video temp file if an error hits
 	defer func() {
 		if err != nil {
-			os.Remove(tempPath)
+			_ = os.Remove(tempPath)
 		}
 	}()
 
-	// stream content
+	// stream main video content
 	written, err := io.Copy(dst, file)
 	dst.Close()
 	if err != nil {
@@ -80,7 +88,6 @@ func (s *Service) SimpleUpload(parentFolderID uint, name string, file io.Reader,
 		return http.StatusInternalServerError, nil, echo.ErrInternalServerError
 	}
 
-	// Verify size (security/integrity check)
 	if written != fileSize {
 		return http.StatusBadRequest, nil, fmt.Errorf("uploaded size mismatch")
 	}
@@ -108,8 +115,18 @@ func (s *Service) SimpleUpload(parentFolderID uint, name string, file io.Reader,
 	// Track upload
 	s.TrackUpload(userID, 0, session.ID, uint64(fileSize))
 
-	// finalize with CreateFile
-	status, dbLink, cloned, err := s.CreateFile(&tempPath, parentFolderID, name, uploadUUID, fileSize, userID, uploadUUID)
+	// Save to DB and write files onto disk
+	status, dbLink, cloned, err := s.CreateFile(
+		&tempPath, 
+		parentFolderID, 
+		name, 
+		uploadUUID, 
+		fileSize, 
+		userID, 
+		uploadUUID,
+		subtitleMode, 
+		externalSubs, 
+	)
 
 	// cleanup dummy session
 	defer s.Deps.DB.Delete(&session)
@@ -119,7 +136,7 @@ func (s *Service) SimpleUpload(parentFolderID uint, name string, file io.Reader,
 	}
 
 	if cloned {
-		os.Remove(tempPath)
+		_ = os.Remove(tempPath)
 	}
 
 	// Update UploadLog with FileID

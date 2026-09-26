@@ -234,7 +234,19 @@ func (w *WorkerGroup) processDownload(parentCtx context.Context, task models.Rem
 	task.Progress = 0.95
 
 	fileUUID := uuid.NewString()
-	status, dbLink, cloned, err := w.logic.CreateFile(&tempPath, task.ParentFolderID, task.Name, fileUUID, task.BytesDownloaded, task.UserID, "")
+
+	status, dbLink, cloned, err := w.logic.CreateFile(
+		&tempPath, 
+		task.ParentFolderID, 
+		task.Name, 
+		fileUUID, 
+		task.BytesDownloaded, 
+		task.UserID, 
+		"",
+		"none",            // 💡 subtitleMode: "none"
+		nil,               // 💡 externalSubs: nil
+	)
+
 	if err != nil {
 		cleanupRemoteTemp(tempPath, fileName)
 		w.failDownload(&task, fmt.Sprintf("Import failed (status %d): %v", status, err))

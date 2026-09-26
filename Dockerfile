@@ -76,7 +76,8 @@ FROM --platform=$TARGETPLATFORM alpine:${ALPINE_VERSION}
 
 WORKDIR /app
 
-RUN apk add --no-cache ffmpeg bash
+# ✅ UPDATED: Added fontconfig and core system fonts library required by FFmpeg's video filter system for subtitle burning
+RUN apk add --no-cache ffmpeg bash fontconfig ttf-dejavu
 
 ARG VERSION=v0.0.0-dev
 ARG CHANNEL=dev
