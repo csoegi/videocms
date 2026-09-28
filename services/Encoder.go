@@ -288,6 +288,11 @@ func (w *WorkerGroup) runEncodeQuality(ctx context.Context, encodingTask models.
 		videoFilterArgs = fmt.Sprintf("-s %dx%d", encodingTask.Width, encodingTask.Height)
 	}
 
+	preset := "veryfast" // Default fast preset for standard video
+	if strings.Contains(videoFilterArgs, "-vf") {
+		preset = "ultrafast" // Drop to ultrafast to compensate for single-threaded subtitle rendering bottleneck
+	}
+
 	var ffmpegCommand string = "echo Encoding type didnt match && exit 1"
 	switch encodingTask.Type {
 	case "hls":
@@ -297,6 +302,7 @@ func (w *WorkerGroup) runEncodeQuality(ctx context.Context, encodingTask models.
 			fmt.Sprint("-sn ") + // disable subtitle
 			fmt.Sprint("-an ") + // disable audio
 			fmt.Sprint("-c:v libx264 ") + // setting video codec libx264
+			fmt.Sprintf("-preset %s ", preset) + // 🌟 Dynamically injected preset
 			fmt.Sprintf("-profile:v %s ", encodingTask.Profile) +
 			fmt.Sprintf("-level:v %s ", encodingTask.Level) +
 			fmt.Sprint("-pix_fmt yuv420p ") + // YUV 4:2:0
@@ -306,7 +312,7 @@ func (w *WorkerGroup) runEncodeQuality(ctx context.Context, encodingTask models.
 			fmt.Sprintf("%s ", frameRateString) + // (optional) setting framerate
 			fmt.Sprintf("-force_key_frames \"expr:gte(t,n_forced*%d)\" ", segmenDuration) + // force keyframes every segmentDuration
 			"-flags +cgop " + // closed GOP
-			fmt.Sprintf("%s ", videoFilterArgs) + // 🌟 Inject soft-burn (-s) OR hard-burn subtitle argument (-vf)
+			fmt.Sprintf("%s ", videoFilterArgs) + // 🌟 Inject subtitle burn argument
 			fmt.Sprint("-sc_threshold 0 ") +
 			"-f hls " + // hls playlist
 			fmt.Sprintf("-hls_time %d ", segmenDuration) + // segment duration
