@@ -127,9 +127,13 @@ func (h *Handlers) SubtitleUploadController(c echo.Context) error {
 		return c.String(http.StatusInternalServerError, "[SubtitleUploadController] [ERROR] Failed to serialize subtitle metadata to json.")
 	}
 
-	// Save the upload session into DB
-	session.StagedSubtitlesJSON = string(updatedJSON)
-	if err := h.Deps.DB.Save(&session).Error; err != nil {
+	// Perform an atomic column-level update instead of calling h.Deps.DB.Save(&session)
+	errFieldUpdate := h.Deps.DB.Model(&models.UploadSession{}).
+		Where("client_upload_uuid = ?", clientUploadUUID).
+		Update("staged_subtitles_json", string(updatedJSON)).Error
+
+	if errFieldUpdate != nil {
+		log.Printf("[SubtitleUploadController] [CRITICAL ERROR] Failed to save isolated JSON to database: %v", errFieldUpdate)
 		return c.String(http.StatusInternalServerError, "[SubtitleUploadController] [ERROR] Failed to persist subtitle metadata to UploadSession table.")
 	}
 

@@ -914,6 +914,25 @@ func (s *Service) Finalize(uploadID string, userID uint) (int, *models.Link, err
 		}
 	}
 
+	// During large-file upload StagedSubtitlesJSON may get overwritten due to concurrency and it comes up empty StagedSubtitlesJSON=[] in api/session response
+	// If subtitle is set but json is empty, look for orphan/left out subtitles that are stuck in temp state
+	// identified by path=videos/uploads/[ClientUploadUUID]/[fileUUID]]_ext.tmp and fileid=0
+	if len(externalSubs) == 0 && session.ClientUploadUUID != "" && (subtitleMode == "soft" || subtitleMode == "hard") {
+		log.Printf("[Services->TusUpload->Finalize] StagedSubtitlesJSON empty but mode is '%s' for session %s. Scanning for orphans...", subtitleMode, session.ClientUploadUUID)
+		
+		cleanUUID := strings.ReplaceAll(session.ClientUploadUUID, "\\", "/")
+		pathLookupPattern := "%" + cleanUUID + "%"
+		
+		var fallbackSubs []models.Subtitle
+		
+		// Find any rows created by the subtitle staging controller matching this session folder structure
+		errQuery := db.Where("path LIKE ? AND file_id = 0", pathLookupPattern).Find(&fallbackSubs).Error
+		if errQuery == nil && len(fallbackSubs) > 0 {
+			log.Printf("[Services->TusUpload->Finalize] Success! Reclaimed %d orphaned subtitle records for processing.", len(fallbackSubs))
+			externalSubs = fallbackSubs
+		}
+	}
+
 	if subtitleMode == "" {
 		subtitleMode = "none"
 	}
