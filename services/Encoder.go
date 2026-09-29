@@ -15,7 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
+	"runtime"
+	
 	"github.com/google/uuid"
 	"github.com/imroc/req/v3"
 	"gorm.io/gorm"
@@ -288,10 +289,14 @@ func (w *WorkerGroup) runEncodeQuality(ctx context.Context, encodingTask models.
 		videoFilterArgs = fmt.Sprintf("-s %dx%d", encodingTask.Width, encodingTask.Height)
 	}
 
-	preset := "veryfast" // Default fast preset for standard video
+	// Set preset
+	preset := "veryfast" // Default very fast preset for standard video
 	if strings.Contains(videoFilterArgs, "-vf") {
 		preset = "ultrafast" // Drop to ultrafast to compensate for single-threaded subtitle rendering bottleneck
 	}
+
+	// Set threads cap to limit CPU usage, leave 2 cores for main app
+	threadsPerJob := w.calculateThreadsPerJob()
 
 	var ffmpegCommand string = "echo Encoding type didnt match && exit 1"
 	switch encodingTask.Type {
@@ -299,6 +304,7 @@ func (w *WorkerGroup) runEncodeQuality(ctx context.Context, encodingTask models.
 
 		ffmpegCommand = "ffmpeg " +
 			fmt.Sprintf("-i %s ", absFileInput) + // input file
+			fmt.Sprintf("-threads %d ", threadsPerJob) + // 🌟 CPU Limit Cap
 			fmt.Sprint("-sn ") + // disable subtitle
 			fmt.Sprint("-an ") + // disable audio
 			fmt.Sprint("-c:v libx264 ") + // setting video codec libx264
@@ -399,6 +405,9 @@ func (w *WorkerGroup) runEncodeAudio(ctx context.Context, encodingTask models.Au
 	absFileInput, _ := filepath.Abs(encodingTask.File.Path)
 	absFolderOutput, _ := filepath.Abs(encodingTask.Path)
 
+	// Set threads cap to limit CPU usage, leave 2 cores for main app
+	threadsPerJob := w.calculateThreadsPerJob()
+
 	var ffmpegCommand string = "echo Audioencoding type didnt match && exit 1"
 	switch encodingTask.Type {
 	case "hls":
@@ -407,6 +416,7 @@ func (w *WorkerGroup) runEncodeAudio(ctx context.Context, encodingTask models.Au
 
 		ffmpegCommand = "ffmpeg " +
 			fmt.Sprintf("-i %s ", absFileInput) + // input file
+			fmt.Sprintf("-threads %d ", threadsPerJob) + // 🌟 Set CPU core limit
 			"-sn " + // disable subtitle
 			"-vn " + // disable video stream
 			fmt.Sprintf("-map 0:a:%d ", encodingTask.Index) + // mapping first audio stream
@@ -504,6 +514,9 @@ func (w *WorkerGroup) runEncodeSub(ctx context.Context, encodingTask models.Subt
 	absFileInput, _ := filepath.Abs(encodingTask.File.Path)
 	absFolderOutput, _ := filepath.Abs(encodingTask.Path)
 
+	// Set threads cap to limit CPU usage, leave 2 cores for main app
+	threadsPerJob := w.calculateThreadsPerJob()
+
 	var ffmpegCommand string = "echo Subencoding type didnt match && exit 1"
 
 	if encodingTask.OriginalCodec == "hdmv_pgs_subtitle" {
@@ -532,6 +545,7 @@ func (w *WorkerGroup) runEncodeSub(ctx context.Context, encodingTask models.Subt
 		case "ass":
 			ffmpegCommand = "ffmpeg " +
 				fmt.Sprintf("-i %s ", absFileInput) + // input file
+				fmt.Sprintf("-threads %d ", threadsPerJob) + // 🌟 Set CPU core limit
 				fmt.Sprintf("-c:s %s ", encodingTask.Codec) + // setting audio codec
 				fmt.Sprintf("%s/%s ", absFolderOutput, encodingTask.OutputFile) + // output file
 				fmt.Sprintf("-progress unix://%s -y", w.tempSock(
@@ -542,6 +556,7 @@ func (w *WorkerGroup) runEncodeSub(ctx context.Context, encodingTask models.Subt
 		case "vtt":
 			ffmpegCommand = "ffmpeg " +
 				fmt.Sprintf("-i %s ", absFileInput) + // input file
+				fmt.Sprintf("-threads %d ", threadsPerJob) + // 🌟 Set CPU core limit
 				fmt.Sprintf("-c:s %s ", encodingTask.Codec) + // setting audio codec
 				fmt.Sprintf("%s/%s ", absFolderOutput, encodingTask.OutputFile) + // output file
 				fmt.Sprintf("-progress unix://%s -y", w.tempSock(
@@ -556,6 +571,7 @@ func (w *WorkerGroup) runEncodeSub(ctx context.Context, encodingTask models.Subt
 		case "ass":
 			ffmpegCommand = "ffmpeg " +
 				fmt.Sprintf("-i %s ", absFileInput) + // input file
+				fmt.Sprintf("-threads %d ", threadsPerJob) + // 🌟 Set CPU core limit
 				"-an " + // disable audio
 				"-vn " + // disable video stream
 				fmt.Sprintf("-map 0:s:%d ", encodingTask.Index) + // mapping first audio stream
@@ -569,6 +585,7 @@ func (w *WorkerGroup) runEncodeSub(ctx context.Context, encodingTask models.Subt
 		case "vtt":
 			ffmpegCommand = "ffmpeg " +
 				fmt.Sprintf("-i %s ", absFileInput) + // input file
+				fmt.Sprintf("-threads %d ", threadsPerJob) + // 🌟 Set CPU core limit
 				"-an " + // disable audio
 				"-vn " + // disable video stream
 				fmt.Sprintf("-map 0:s:%d ", encodingTask.Index) + // mapping first audio stream
@@ -624,6 +641,35 @@ func (w *WorkerGroup) runEncodeSub(ctx context.Context, encodingTask models.Subt
 	encodingTask.Encoding = false
 	encodingTask.Ready = true
 	w.deps.DB.Save(&encodingTask)
+}
+
+func (w *WorkerGroup) calculateThreadsPerJob() int {
+	totalCores := runtime.NumCPU()
+
+	// 1. Keep 25% of the machine's capacity free for Web/Player traffic, capped at 2 cores max
+	freeCoresForWeb := totalCores / 4
+	if freeCoresForWeb > 2 {
+		freeCoresForWeb = 2
+	}
+	// Safeguard: Ensure we leave at least 1 core for the OS/Go if totalCores > 1
+	if freeCoresForWeb < 1 && totalCores > 1 {
+		freeCoresForWeb = 1
+	}
+
+	// 2. Divide remaining cores among allowed concurrent encoding queues
+	maxJobs := int(w.Config().MaxRunningEncodes)
+	if maxJobs < 1 {
+		maxJobs = 1
+	}
+
+	threadsPerJob := (totalCores - freeCoresForWeb) / maxJobs
+
+	// 3. Absolute safety fallback: An FFmpeg job must use at least 1 thread
+	if threadsPerJob < 1 {
+		threadsPerJob = 1
+	}
+
+	return threadsPerJob
 }
 
 func (w *WorkerGroup) tempSock(totalDuration float64, sockFileName string, encodingTask IwithProcess) string {
