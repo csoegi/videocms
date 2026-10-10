@@ -1,0 +1,11 @@
+services:
+  videocms:
+    image: 'chrissoe/videocms:latest'
+    restart: unless-stopped
+    volumes:
+      - '/data/videocms/videos:/app/videos'
+      - '/data/videocms/database:/app/database'
+    expose:
+      - '3000'
+    labels:
+      caddy_0.request_body.max_size: 5G
