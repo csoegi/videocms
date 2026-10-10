@@ -427,3 +427,21 @@ jobs:
             dist/videocms_linux_arm64 \
             dist/checksums.txt \
             --clobber
+      # ADDED: Automated deployment to production VPS via SSH password
+      # Update the following secrets in your GitHub repository secrets:
+      # - PROD_SSH_HOST: The hostname or IP address of your production VPS.
+      # - PROD_SSH_USERNAME: The SSH username for your production VPS.
+      # - PROD_SSH_PASSWORD: The SSH password for your production VPS.
+      # - PROD_COOLIFY_SERVICE_ID: The Coolify service ID for the videocms service.
+      - name: Deploy to Production VPS via SSH Password
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USERNAME }}
+          password: ${{ secrets.PROD_SSH_PASSWORD }}
+          port: 22
+          script: |
+            cd /data/coolify/services/${{ secrets.PROD_COOLIFY_SERVICE_ID }}/
+            docker compose stop videocms
+            docker compose pull videocms
+            docker compose up -d --renew-anon-volumes --force-recreate --remove-orphans videocms
