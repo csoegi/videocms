@@ -25,6 +25,7 @@ type Quality struct {
 	Path         string `gorm:"size:120;" json:"-"`
 	OutputFile   string
 	Encoding     bool
+	Publishing   bool `json:"-"`
 	Progress     float64
 	Failed       bool
 	Ready        bool   `json:"-"`

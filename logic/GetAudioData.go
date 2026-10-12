@@ -42,6 +42,6 @@ func (s *Service) GetAudioData(requestValidation *models.AudioGetValidation) (st
 		return http.StatusNotFound, nil, 0, 0, 0, errors.New("audio doesn't exist")
 	}
 
-	resPath := fmt.Sprintf("%s/%s/%s/%s", s.Config().FolderVideoQualitysPriv, dbLink.File.UUID, requestValidation.AUDIOUUID, requestValidation.FILE)
+	resPath := fmt.Sprintf("%s/%s/%s/%s", s.Config().PublishedQualitysRoot(), dbLink.File.UUID, requestValidation.AUDIOUUID, requestValidation.FILE)
 	return http.StatusOK, &resPath, dbLink.UserID, dbLink.FileID, audioID, nil
 }

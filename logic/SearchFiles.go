@@ -16,6 +16,8 @@ func (s *Service) SearchFiles(userId uint, query string) (status int, response *
 		Preload("User").
 		Preload("File").
 		Preload("File.Qualitys").
+		Preload("File.Audios").
+		Preload("File.Subtitles").
 		Preload("Tags").
 		Where("user_id = ? AND name LIKE ?", userId, "%"+query+"%").
 		Order("name ASC").

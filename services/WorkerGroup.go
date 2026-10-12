@@ -6,6 +6,7 @@ import (
 	downloadsvc "ch/kirari04/videocms/download"
 	"ch/kirari04/videocms/logic"
 	"context"
+	"log"
 	"sync"
 	"time"
 )
@@ -59,14 +60,18 @@ func (w *WorkerGroup) Start(ctx context.Context) {
 
 	cfg := w.Config()
 	if cfg.EncodingEnabled != nil && *cfg.EncodingEnabled {
+		log.Printf("Encoder worker enabled (MaxRunningEncodes=%d)", cfg.MaxRunningEncodes)
 		w.ResetEncodingState()
 		go w.Encoder(ctx)
+	} else {
+		log.Printf("Encoder worker NOT started: persistent EncodingEnabled setting is false or unset")
 	}
 
 	go w.Downloader(ctx)
 	go w.DownloadPreparer(ctx)
 	go w.DownloadPreparationCleanup(ctx)
 	go w.EncoderCleanup(ctx)
+	go w.Publisher(ctx)
 	go w.Deleter(ctx)
 	go w.AuditCleanup(ctx)
 	go w.Resources(ctx)
