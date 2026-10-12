@@ -834,11 +834,28 @@
             });
         }
         
-        // Wait for player to be ready for interactions
+        // 1. FIX: Missing Media Token due to cookies not being sent on HLS chunk requests for cross-domain access. 
+        // This is a safe injection BEFORE the media provider starts loading chunks, 
+        // ensuring that the underlying streaming framework has the correct configuration for cross-domain requests.
         player.addEventListener('provider-change', (event) => {
-             // Provider (HLS) loaded
-             activateWebhooks();
-             setupDownloads();
+            const provider = event.detail;
+            
+            if (provider && provider.type === 'hls') {
+                // Safe injection before the underlying streaming framework starts loading chunks
+                provider.config = {
+                    xhrSetup: (xhr, url) => {
+                        xhr.withCredentials = true; // Forces cross-domain cookie validation on range requests
+                    }
+                };
+            }
+        });
+
+        // 2. Move Hook into provider-setup after media provider is fully initialized and stable. 
+        // This ensures that the player framework is ready for webhooks and downloads.
+        player.addEventListener('provider-setup', (event) => {
+            // The player framework is loaded and stable at this point
+            activateWebhooks();
+            setupDownloads();
         });
 
         // --- Download Logic ---
