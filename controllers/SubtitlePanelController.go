@@ -1,15 +1,16 @@
 package controllers
 
 import (
-	"ch/kirari04/videocms/models"
 	"ch/kirari04/videocms/helpers"
+	"ch/kirari04/videocms/models"
+	"ch/kirari04/videocms/services"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	
+
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
@@ -41,7 +42,7 @@ func (h *Handlers) AddSubtitleTrackDirect(c echo.Context) error {
 	defer src.Close()
 
 	subtitleUUID := uuid.NewString()
-	productionSubDir := filepath.Join(h.Config().FolderVideoQualitysPriv, file.UUID, subtitleUUID)
+	productionSubDir := filepath.Join(h.Config().PublishedQualitysRoot(), file.UUID, subtitleUUID)
 	targetOutputName := fmt.Sprintf("%s.srt", subtitleUUID)
 	finalDiskFilePath := filepath.Join(productionSubDir, targetOutputName)
 
@@ -65,17 +66,17 @@ func (h *Handlers) AddSubtitleTrackDirect(c echo.Context) error {
 	dst.Close()
 
 	newSub := models.Subtitle{
-		UUID:            subtitleUUID,
-		Name:            formFile.Filename,
-		Lang:            language,
-		Type:            "vtt",
-		Path:            productionSubDir,
-		OutputFile:      targetOutputName,
-		FileID:          file.ID,
-		Source:          "external",
-		Index:           -1, // 💡 HARDCODED TO -1 TO INSULATE FROM WORKERS
-		Ready:           true,
-		Progress:        100.0,
+		UUID:       subtitleUUID,
+		Name:       formFile.Filename,
+		Lang:       language,
+		Type:       "vtt",
+		Path:       productionSubDir,
+		OutputFile: targetOutputName,
+		FileID:     file.ID,
+		Source:     "external",
+		Index:      -1, // 💡 HARDCODED TO -1 TO INSULATE FROM WORKERS
+		Ready:      true,
+		Progress:   100.0,
 	}
 
 	if errDb := h.Deps.DB.Create(&newSub).Error; errDb != nil {
@@ -88,7 +89,7 @@ func (h *Handlers) AddSubtitleTrackDirect(c echo.Context) error {
 // Update SubtitleMode ("none", "soft", "hard") and hard-burn track selection
 func (h *Handlers) UpdateVideoSubtitleConfig(c echo.Context) error {
 	videoUUID := c.Param("uuid")
-	
+
 	var payload models.SubtitleSettingValidation
 	if status, err := helpers.Validate(c, &payload); err != nil {
 		return c.String(status, err.Error())
@@ -131,17 +132,20 @@ func (h *Handlers) UpdateVideoSubtitleConfig(c echo.Context) error {
 		if triggerReEncode {
 			for _, quality := range file.Qualitys {
 				// 1. Cleanly wipe old physical directory
-				if quality.Path != "" && strings.Contains(quality.Path, "qualitys") {
-					_ = os.RemoveAll(quality.Path)
+				if quality.Path != "" {
+					if err := services.DeleteMediaAt(c.Request().Context(), h.Config(), filepath.Join(file.UUID, filepath.Base(quality.Path))); err != nil {
+						return err
+					}
 				}
-				
+
 				// 2. Reset Video Quality Status so Encoder worker will pick it up for re-encoding
 				tx.Model(&models.Quality{}).Where("id = ?", quality.ID).Updates(map[string]interface{}{
-					"ready":    false,
-					"failed":   false,
-					"encoding": false,
-					"progress": 0.0,
-					"error":    "",
+					"ready":      false,
+					"failed":     false,
+					"encoding":   false,
+					"publishing": false,
+					"progress":   0.0,
+					"error":      "",
 				})
 			}
 		}
@@ -158,15 +162,17 @@ func (h *Handlers) UpdateVideoSubtitleConfig(c echo.Context) error {
 
 // Delete subtitle from DB and its folder from hard drive
 func (h *Handlers) DeleteSubtitleTrackDirect(c echo.Context) error {
-	subUUID := c.Param("sub_uuid") 
+	subUUID := c.Param("sub_uuid")
 
 	var sub models.Subtitle
-	if err := h.Deps.DB.Where("uuid = ?", subUUID).First(&sub).Error; err != nil {
+	if err := h.Deps.DB.Preload("File").Where("uuid = ?", subUUID).First(&sub).Error; err != nil {
 		return c.JSON(http.StatusNotFound, map[string]string{"error": "Subtitle not found in DB"})
 	}
 
-	if sub.Path != "" && strings.Contains(sub.Path, "qualitys") {
-		_ = os.RemoveAll(sub.Path)
+	if sub.Path != "" {
+		if err := services.DeleteMediaAt(c.Request().Context(), h.Config(), filepath.Join(sub.File.UUID, sub.UUID)); err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 	}
 
 	h.Deps.DB.Delete(&sub)

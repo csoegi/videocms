@@ -5,6 +5,14 @@ services:
     volumes:
       - '/data/videocms/videos:/app/videos'
       - '/data/videocms/database:/app/database'
+    environment:
+      PublisherMode: "${PublisherMode:-local}"
+      PublisherSSHHost: "${PublisherSSHHost:-}"
+      PublisherSSHPort: "${PublisherSSHPort:-22}"
+      PublisherSSHUser: "${PublisherSSHUser:-}"
+      PublisherSSHPassword: "${PublisherSSHPassword:-}"
+      PublisherSSHKey: "${PublisherSSHKey:-}"
+      PublisherSSHRemoteRoot: "${PublisherSSHRemoteRoot:-}"
     expose:
       - '3000'
     labels:

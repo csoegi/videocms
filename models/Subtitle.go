@@ -11,9 +11,10 @@ type Subtitle struct {
 	OriginalCodec string `json:"-"`
 	Index         int    `json:"-"`
 	Codec         string
-	Type          string 
+	Type          string
 	OutputFile    string
 	Encoding      bool
+	Publishing    bool `json:"-"`
 	Progress      float64
 	Failed        bool
 	Ready         bool
@@ -23,7 +24,7 @@ type Subtitle struct {
 
 	// --- Soft/Hard burning subtitles
 	Source          string `gorm:"type:varchar(20);default:'internal'" json:"source"` // "internal" | "external"
-	SelectedForBurn bool `gorm:"default:false" json:"selected_for_burn"` // True for hard-burned
+	SelectedForBurn bool   `gorm:"default:false" json:"selected_for_burn"`            // True for hard-burned
 }
 
 // Subtitle tracking data serialized inside the UploadSession storage block.
@@ -36,10 +37,9 @@ type SubtitleSessionData struct {
 }
 
 type SubtitleSettingValidation struct {
-	SubtitleMode        string `json:"SubtitleMode" validate:"omitempty,oneof=none soft hard"`
-	SelectedBurnUUID  	string `json:"SelectedBurnUUID" validate:"omitempty"`
+	SubtitleMode     string `json:"SubtitleMode" validate:"omitempty,oneof=none soft hard"`
+	SelectedBurnUUID string `json:"SelectedBurnUUID" validate:"omitempty"`
 }
-
 
 func (c *Subtitle) SetProcess(v float64) {
 	c.Progress = v

@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 )
 
 func EnsureFolders(env config.Config) error {
 	// create folders
 	createFolders := []string{"./database", env.FolderVideoQualitysPriv, env.FolderVideoUploadsPriv, "./logs"}
+	if !strings.EqualFold(env.PublisherMode, "rsync-ssh") {
+		createFolders = append(createFolders, env.PublishedQualitysRoot())
+	}
 	for _, createFolder := range createFolders {
 		if fileInfo, err := os.Stat(createFolder); err != nil || !fileInfo.IsDir() {
 			if err := os.MkdirAll(createFolder, 0766); err != nil {

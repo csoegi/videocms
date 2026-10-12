@@ -25,9 +25,13 @@ type LinkListItem struct {
 	Duration       float64
 	Thumbnail      string
 	Processing     bool
+	// PublicationStatus is the file-level publication state used by the
+	// library UI. Values are: ready, processing, failed, or unknown.
+	PublicationStatus string
 }
 
 func (s *Service) buildLinkListItems(links []models.Link) *[]LinkListItem {
+	tasksByFileID := s.publisherTasksByFileID(links)
 	items := make([]LinkListItem, 0, len(links))
 	for _, link := range links {
 		processing := false
@@ -37,21 +41,125 @@ func (s *Service) buildLinkListItems(links []models.Link) *[]LinkListItem {
 				break
 			}
 		}
+		fileID := link.File.ID
+		if fileID == 0 {
+			fileID = link.FileID
+		}
+		task, hasTask := tasksByFileID[fileID]
 		items = append(items, LinkListItem{
-			ID:             link.ID,
-			CreatedAt:      link.CreatedAt,
-			UpdatedAt:      link.UpdatedAt,
-			UUID:           link.UUID,
-			Name:           link.Name,
-			ParentFolderID: link.ParentFolderID,
-			Tags:           link.Tags,
-			Size:           link.File.Size,
-			Duration:       link.File.Duration,
-			Thumbnail:      s.ResolvedThumbnailURL(link),
-			Processing:     processing,
+			ID:                link.ID,
+			CreatedAt:         link.CreatedAt,
+			UpdatedAt:         link.UpdatedAt,
+			UUID:              link.UUID,
+			Name:              link.Name,
+			ParentFolderID:    link.ParentFolderID,
+			Tags:              link.Tags,
+			Size:              link.File.Size,
+			Duration:          link.File.Duration,
+			Thumbnail:         s.ResolvedThumbnailURL(link),
+			Processing:        processing,
+			PublicationStatus: derivePublicationStatus(link.File, task.Status, hasTask),
 		})
 	}
 	return &items
+}
+
+// publisherTasksByFileID loads task states in one query for the whole list,
+// avoiding an N+1 query pattern for large libraries.
+func (s *Service) publisherTasksByFileID(links []models.Link) map[uint]models.PublisherTask {
+	tasksByFileID := make(map[uint]models.PublisherTask)
+	fileIDs := make([]uint, 0, len(links))
+	seen := make(map[uint]struct{}, len(links))
+	for _, link := range links {
+		fileID := link.File.ID
+		if fileID == 0 {
+			fileID = link.FileID
+		}
+		if fileID == 0 {
+			continue
+		}
+		if _, exists := seen[fileID]; exists {
+			continue
+		}
+		seen[fileID] = struct{}{}
+		fileIDs = append(fileIDs, fileID)
+	}
+	if len(fileIDs) == 0 {
+		return tasksByFileID
+	}
+	var tasks []models.PublisherTask
+	if err := s.Deps.DB.Where("file_id IN ?", fileIDs).Find(&tasks).Error; err != nil {
+		log.Printf("Failed to load publisher tasks for library list: %v", err)
+		return tasksByFileID
+	}
+	for _, task := range tasks {
+		tasksByFileID[task.FileID] = task
+	}
+	return tasksByFileID
+}
+
+// derivePublicationStatus uses the durable publisher task as the authority
+// when one exists. It falls back to asset states for older videos created
+// before PublisherTask was introduced.
+func derivePublicationStatus(file models.File, taskStatus string, hasTask bool) string {
+	qualities := file.Qualitys
+	audios := file.Audios
+	subtitles := file.Subtitles
+	assetCount := len(qualities) + len(audios) + len(subtitles)
+
+	anyEncoding := false
+	anyPublishing := false
+	anyFailed := false
+	allAssetsReady := true
+	for _, item := range qualities {
+		anyEncoding = anyEncoding || item.Encoding
+		anyPublishing = anyPublishing || item.Publishing
+		anyFailed = anyFailed || item.Failed
+		allAssetsReady = allAssetsReady && item.Ready
+	}
+	for _, item := range audios {
+		anyEncoding = anyEncoding || item.Encoding
+		anyPublishing = anyPublishing || item.Publishing
+		anyFailed = anyFailed || item.Failed
+		allAssetsReady = allAssetsReady && item.Ready
+	}
+	for _, item := range subtitles {
+		anyEncoding = anyEncoding || item.Encoding
+		anyPublishing = anyPublishing || item.Publishing
+		anyFailed = anyFailed || item.Failed
+		allAssetsReady = allAssetsReady && item.Ready
+	}
+
+	// Re-encoding/re-publishing supersedes a previous ready or failed state.
+	if anyEncoding {
+		return "processing"
+	}
+	if anyFailed {
+		return "failed"
+	}
+	if hasTask {
+		switch taskStatus {
+		case "pending", "running":
+			return "processing"
+		case "failed":
+			return "failed"
+		case "ready":
+			if anyPublishing {
+				return "processing"
+			}
+			return "ready"
+		}
+	}
+
+	// Legacy records may have no publisher_tasks row. Derive their state from
+	// all known assets so existing published videos still show as Ready.
+	if anyPublishing || (assetCount > 0 && !allAssetsReady) {
+		return "processing"
+	}
+	if len(qualities) > 0 && allAssetsReady {
+		return "ready"
+	}
+	return "unknown"
 }
 
 func (s *Service) ListFiles(fromFolder uint, userId uint) (status int, response *[]LinkListItem, err error) {
@@ -70,6 +178,8 @@ func (s *Service) ListFiles(fromFolder uint, userId uint) (status int, response 
 		Preload("User").
 		Preload("File").
 		Preload("File.Qualitys").
+		Preload("File.Audios").
+		Preload("File.Subtitles").
 		Preload("Tags").
 		Where(&models.Link{
 			ParentFolderID: fromFolder,

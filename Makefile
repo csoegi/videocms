@@ -10,6 +10,8 @@ DEV_BACKEND_PORT ?= 3001
 DEV_BACKEND_URL ?= http://$(DEV_BACKEND_HOST):$(DEV_BACKEND_PORT)
 DEV_PUBLIC_ORIGIN ?= http://$(DEV_FRONTEND_HOST):$(DEV_FRONTEND_PORT)
 DEV_MEDIA_PATH ?= /videos/qualitys
+DOCKER_ENV_FILE ?= .env
+DOCKER_ENV_ARGS = $(if $(wildcard $(DOCKER_ENV_FILE)),--env-file $(DOCKER_ENV_FILE),)
 
 # --- PRODUCTION BUILDING TARGETS ---
 dev:
@@ -38,7 +40,14 @@ dev-frontend:
 # --- BUILD & RUN PRODUCTION LOCALLY ---
 prod: build
 	@echo "🚀 [Production] Launching Single-Server Standalone Application..."
-	./videocms serve:main
+	@set -e; \
+	if [ -f .env ]; then \
+		set -a; \
+		. ./.env; \
+		set +a; \
+	fi; \
+	echo "⚡ [Production] PublisherMode=$${PublisherMode:-local}"; \
+	exec ./videocms serve:main
 
 # --- PRODUCTION BUILDING TARGETS ---
 
@@ -77,10 +86,11 @@ docker-build:
 # Run the latest locally built image wihtout pulling from registry. 
 docker-run:
 	@echo "🚀 Launching Local Docker Image ($(LOCAL_IMAGE))..."
-	@echo "⚠️  Binding container as 'videocms-local' to prevent production collisions."
+	@echo "⚠️ Binding container as 'videocms-local' to prevent production collisions."
 	-docker rm -f videocms-local 2>/dev/null || true
 	docker run -d \
 		--name videocms-local \
+		$(DOCKER_ENV_ARGS) \
 		-p 3000:3000 \
 		-v $$(pwd)/database:/app/database \
 		-v $$(pwd)/videos:/app/videos \
