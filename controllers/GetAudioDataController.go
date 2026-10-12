@@ -32,7 +32,7 @@ func (h *Handlers) GetAudioData(c echo.Context) error {
 		return c.String(http.StatusNotFound, "Audio doesn't exist")
 	}
 
-	filePath := fmt.Sprintf("%s/%s/%s/%s", h.Config().FolderVideoQualitysPriv, claims.FileUUID, requestValidation.AUDIOUUID, requestValidation.FILE)
+	filePath := fmt.Sprintf("%s/%s/%s/%s", h.Config().PublishedQualitysRoot(), claims.FileUUID, requestValidation.AUDIOUUID, requestValidation.FILE)
 	fileInfo, err := os.Stat(filePath)
 	if err == nil {
 		h.Logic.TrackTraffic(claims.UserID, claims.FileID, 0, audioID, uint64(fileInfo.Size()))

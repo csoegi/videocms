@@ -83,14 +83,13 @@ func (w *WorkerGroup) runEncoderCleanup() {
 				continue
 			}
 
-			// overwrite total filesize in file
-			newSize, err := dirSize(dbReadyFile.Folder)
-			if err != nil {
-				log.Printf("Failed to calc folder size after cleenup: %v", err)
-			}
-			dbReadyFile.Size = newSize
+			// The publisher already calculated and saved the output size.
+			// Do not recalculate here: the published folder may be on
+			// remote storage and therefore unavailable on the local filesystem.
 			dbReadyFile.Path = ""
-			w.deps.DB.Save(&dbReadyFile)
+			if err := w.deps.DB.Save(&dbReadyFile).Error; err != nil {
+				log.Printf("Failed to save file after cleanup (file ID %d): %v", dbReadyFile.ID, err)
+			}
 		}
 	}
 }

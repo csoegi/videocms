@@ -24,14 +24,14 @@ import (
 )
 
 func (s *Service) CreateFile(
-	fromFile *string, 
-	toFolder uint, 
-	fileName string, 
-	fileId string, 
-	fileSize int64, 
-	userId uint, 
+	fromFile *string,
+	toFolder uint,
+	fileName string,
+	fileId string,
+	fileSize int64,
+	userId uint,
 	excludeSessionUUID string,
-	subtitleMode string,                 
+	subtitleMode string,
 	externalSubs []models.Subtitle,
 ) (status int, newFile *models.Link, cloned bool, err error) {
 	//check if requested folder exists (if set)
@@ -200,7 +200,7 @@ func (s *Service) CreateFile(
 			Duration:     videoDuration,
 			AvgFrameRate: avgFramerate,
 			Size:         fileSize,
-			SubtitleMode: subtitleMode, 
+			SubtitleMode: subtitleMode,
 		}
 		if err := tx.Create(&dbFile).Error; err != nil {
 			return err
@@ -280,7 +280,7 @@ func (s *Service) CreateFile(
 		if len(nameSplits) > 1 {
 			ext = strings.ToLower(nameSplits[len(nameSplits)-1])
 		}
-		
+
 		baseQualityDir := filepath.ToSlash(s.Config().FolderVideoQualitysPriv)
 		tempStagingPath := filepath.ToSlash(extSub.Path) // 💡 Now contains the true staging path decoded from JSON!
 
@@ -306,7 +306,7 @@ func (s *Service) CreateFile(
 			log.Printf("[Logic->CreateFile] [ERROR] Failed to write subtitle file to quality folder: %v", errWrite)
 			continue
 		}
-		
+
 		// Clean up the temporary upload staging file track asset safely
 		_ = os.Remove(tempStagingPath)
 
@@ -314,17 +314,18 @@ func (s *Service) CreateFile(
 		errUpdate := s.Deps.DB.Model(&models.Subtitle{}).
 			Where("uuid = ?", extSub.UUID).
 			Updates(map[string]interface{}{
-				"file_id":           dbFile.ID,          
-				"output_file":       targetOutputName,   
-				"codec":             "vtt",
-				"original_codec":    ext,
-				"source":            "external", // Set to "external"
-				"index":             -1, // Default index for external
-				"path":              productionSubDir,   			
-				"ready":             true, // Unlock visibility immediately
-				"encoding":          false,
-				"failed":            false,
-				"progress":          100.0,
+				"file_id":        dbFile.ID,
+				"output_file":    targetOutputName,
+				"codec":          "vtt",
+				"original_codec": ext,
+				"source":         "external", // Set to "external"
+				"index":          -1,         // Default index for external
+				"path":           productionSubDir,
+				"ready":          false, // External subtitle is staged until publication
+				"publishing":     true,
+				"encoding":       false,
+				"failed":         false,
+				"progress":       0.0, // Waiting for publication is not encoding progress.
 			}).Error
 
 		if errUpdate != nil {

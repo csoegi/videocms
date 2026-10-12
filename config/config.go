@@ -78,9 +78,17 @@ type Config struct {
 	MaxUploadSessions  int64
 	MaxPostSize        int64
 
-	FolderVideoQualitysPub  string `validate:"required,min=1,max=255"`
-	FolderVideoQualitysPriv string `validate:"required,min=1,max=255"`
-	FolderVideoUploadsPriv  string `validate:"required,min=1,max=255"`
+	FolderVideoQualitysPub   string `validate:"required,min=1,max=255"`
+	FolderVideoQualitysPriv  string `validate:"required,min=1,max=255"` // local staging root
+	FolderVideoQualitysFinal string `validate:"required,min=1,max=255"` // published storage root
+	FolderVideoUploadsPriv   string `validate:"required,min=1,max=255"`
+	PublisherMode            string
+	PublisherSSHHost         string
+	PublisherSSHPort         string
+	PublisherSSHUser         string
+	PublisherSSHPassword     string
+	PublisherSSHKey          string
+	PublisherSSHRemoteRoot   string
 
 	CorsAllowOrigins     string
 	CorsAllowHeaders     string
@@ -136,10 +144,10 @@ type Config struct {
 	MaxParallelDownloadPreparations   int64
 	MaxQueuedDownloadPreparations     int64
 	DownloadPreparationRetentionHours int64
-	
+
 	// Advertisement Settings
 	AdsVisibility  bool `env:"ADS_VISIBILITY" envDefault:"false"`
-    AdsSkipSeconds int  `env:"ADS_SKIP_SECONDS" envDefault:"10"`
+	AdsSkipSeconds int  `env:"ADS_SKIP_SECONDS" envDefault:"10"`
 
 	// Analytics Settings
 	AnalyticsEnabled        bool `env:"ANALYTICS_ENABLED" envDefault:"true"`
@@ -147,13 +155,13 @@ type Config struct {
 	AnalyticsWorkerInterval int  `env:"ANALYTICS_WORKER_INTERVAL" envDefault:"60"`
 
 	// Watermark Settings
-	WatermarkEnabled        bool `env:"WatermarkEnabled" envDefault:"false"`
-	WatermarkType    		string  `env:"WatermarkType" envDefault:"text"` // text | image
-	WatermarkText	 		string  `env:"WatermarkText" envDefault:""`
-	WatermarkImageLink	 	string  `env:"WatermarkImageLink" envDefault:""`
-	WatermarkPosition	 	string  `env:"WatermarkPosition" envDefault:""` // top_left | top_right | top_center | mid_left | mid_center | mid_right | bottom_left | bottom_center | bottom_right
-	WatermarkMargin	 		int  `env:"WatermarkMargin" envDefault:"0"`
-	WatermarkTransparency 	int  `env:"WatermarkTransparency" envDefault:"0"` // 0-100
+	WatermarkEnabled      bool   `env:"WatermarkEnabled" envDefault:"false"`
+	WatermarkType         string `env:"WatermarkType" envDefault:"text"` // text | image
+	WatermarkText         string `env:"WatermarkText" envDefault:""`
+	WatermarkImageLink    string `env:"WatermarkImageLink" envDefault:""`
+	WatermarkPosition     string `env:"WatermarkPosition" envDefault:""` // top_left | top_right | top_center | mid_left | mid_center | mid_right | bottom_left | bottom_center | bottom_right
+	WatermarkMargin       int    `env:"WatermarkMargin" envDefault:"0"`
+	WatermarkTransparency int    `env:"WatermarkTransparency" envDefault:"0"` // 0-100
 }
 
 type PublicConfig struct {
@@ -255,6 +263,15 @@ func cloneBool(value *bool) *bool {
 	return &cloned
 }
 
+// PublishedQualitysRoot returns the permanent media root. The fallback keeps
+// older tests and deployments that construct Config directly backward-compatible.
+func (c Config) PublishedQualitysRoot() string {
+	if c.FolderVideoQualitysFinal != "" {
+		return c.FolderVideoQualitysFinal
+	}
+	return c.FolderVideoQualitysPriv
+}
+
 type ConfigMap map[string]string
 
 func LoadEnv() Config {
@@ -262,9 +279,17 @@ func LoadEnv() Config {
 
 	env.Host = getEnv("Host", ":3000")
 
-	env.FolderVideoQualitysPriv = getEnv("FolderVideoQualitysPriv", "./videos/qualitys")
+	env.FolderVideoQualitysPriv = getEnv("FolderVideoQualitysPriv", "./videos/staging")
+	env.FolderVideoQualitysFinal = getEnv("FolderVideoQualitysFinal", "./videos/qualitys")
 	env.FolderVideoQualitysPub = getEnv("FolderVideoQualitysPub", "/videos/qualitys")
 	env.FolderVideoUploadsPriv = getEnv("FolderVideoUploadsPriv", "./videos/uploads")
+	env.PublisherMode = getEnv("PublisherMode", "local")
+	env.PublisherSSHHost = getEnv("PublisherSSHHost", "")
+	env.PublisherSSHPort = getEnv("PublisherSSHPort", "22")
+	env.PublisherSSHUser = getEnv("PublisherSSHUser", "")
+	env.PublisherSSHPassword = getEnv("PublisherSSHPassword", "")
+	env.PublisherSSHKey = getEnv("PublisherSSHKey", "")
+	env.PublisherSSHRemoteRoot = getEnv("PublisherSSHRemoteRoot", "")
 	env.StatsDriveName = getEnv("StatsDriveName", "nvme0n1")
 
 	// dvertisement Parameters

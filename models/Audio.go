@@ -14,6 +14,7 @@ type Audio struct {
 	Type          string
 	OutputFile    string `json:"-"`
 	Encoding      bool
+	Publishing    bool `json:"-"`
 	Progress      float64
 	Failed        bool
 	Ready         bool   `json:"-"`

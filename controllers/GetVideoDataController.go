@@ -40,7 +40,7 @@ func (h *Handlers) GetVideoData(c echo.Context) error {
 		return c.String(http.StatusNotFound, "Video doesn't exist")
 	}
 
-	filePath := fmt.Sprintf("%s/%s/%s/%s", h.Config().FolderVideoQualitysPriv, claims.FileUUID, requestValidation.QUALITY, requestValidation.FILE)
+	filePath := fmt.Sprintf("%s/%s/%s/%s", h.Config().PublishedQualitysRoot(), claims.FileUUID, requestValidation.QUALITY, requestValidation.FILE)
 	fileInfo, err := os.Stat(filePath)
 	if err == nil {
 		h.Logic.TrackTraffic(claims.UserID, claims.FileID, qualityID, 0, uint64(fileInfo.Size()))

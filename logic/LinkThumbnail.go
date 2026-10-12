@@ -58,7 +58,7 @@ func (s *Service) UpdateLinkThumbnail(linkID uint, userID uint, isAdmin bool, in
 		return http.StatusBadRequest, errors.New("thumbnail must be a JPEG, PNG, or WebP image")
 	}
 
-	outputFolder := filepath.Join(s.Config().FolderVideoQualitysPriv, dbLink.File.UUID)
+	outputFolder := filepath.Join(s.Config().PublishedQualitysRoot(), dbLink.File.UUID)
 	if err := os.MkdirAll(outputFolder, 0o777); err != nil {
 		log.Printf("Failed to create thumbnail folder: %v", err)
 		return http.StatusInternalServerError, echo.ErrInternalServerError
@@ -191,7 +191,7 @@ func (s *Service) loadThumbnailLink(linkID uint, userID uint, isAdmin bool) (mod
 }
 
 func (s *Service) linkThumbnailPath(link models.Link) string {
-	return filepath.Join(s.Config().FolderVideoQualitysPriv, link.File.UUID, link.Thumbnail)
+	return filepath.Join(s.Config().PublishedQualitysRoot(), link.File.UUID, link.Thumbnail)
 }
 
 func (s *Service) convertThumbnailToWebP(inputPath string, outputPath string) error {

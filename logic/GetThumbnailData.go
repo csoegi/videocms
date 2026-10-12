@@ -24,7 +24,7 @@ func (s *Service) GetThumbnailData(fileName string, UUID string) (status int, fi
 		return http.StatusNotFound, nil, 0, 0, errors.New("thumbnail doesn't exist")
 	}
 
-	fileRes := fmt.Sprintf("%s/%s/%s", s.Config().FolderVideoQualitysPriv, dbLink.File.UUID, fileName)
+	fileRes := fmt.Sprintf("%s/%s/%s", s.Config().PublishedQualitysRoot(), dbLink.File.UUID, fileName)
 
 	return http.StatusOK, &fileRes, dbLink.UserID, dbLink.FileID, nil
 }

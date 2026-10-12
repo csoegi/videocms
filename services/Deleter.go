@@ -35,7 +35,7 @@ func (w *WorkerGroup) runDeleter() {
 
 	if len(notReferencedFiles) > 0 {
 		if res := w.deps.DB.Delete(&models.File{}, notReferencedFiles); res.Error != nil {
-			log.Printf("Failed to delete unreferenced files: %v", res.Error)
+			log.Printf("[Services->Deleter->runDeleter] [ERROR]: Failed to delete unreferenced files: %v", res.Error)
 			return
 		}
 	}
@@ -50,12 +50,12 @@ func (w *WorkerGroup) runDeleter() {
 		Unscoped().
 		Where("deleted_at IS NOT NULL").
 		Find(&todos, todos); res.Error != nil {
-		log.Printf("Failed to query deleted files: %v", res.Error)
+		log.Printf("[Services->Deleter->runDeleter] [ERROR]: Failed to query deleted files: %v", res.Error)
 		return
 	}
 
 	if len(todos) > 0 {
-		log.Printf("Queued %d file to delete", len(todos))
+		log.Printf("[Services->Deleter->runDeleter] [INFO]: Queued %d file to delete", len(todos))
 	}
 	var skippingDeletion int
 	var successDeletion int
@@ -87,6 +87,12 @@ func (w *WorkerGroup) runDeleter() {
 			}
 		}
 
+		var publisherTask models.PublisherTask
+		if err := w.deps.DB.Where("file_id = ?", todo.ID).First(&publisherTask).Error; err == nil && publisherTask.Status == publisherRunning {
+			skippingDeletion++
+			continue
+		}
+
 		if encoding {
 			// kill ffmpeg process if active
 			for _, v := range w.activeEncodingsForFile(todo.ID) {
@@ -107,7 +113,7 @@ func (w *WorkerGroup) runDeleter() {
 				FileID: todo.ID,
 			}).
 			Delete(&models.Subtitle{}); res.Error != nil {
-			log.Printf("Failed to delete Subtitles from database: %v", res.Error)
+			log.Printf("[Services->Deleter->runDeleter] [ERROR]: Failed to delete Subtitles from database: %v", res.Error)
 			continue
 		}
 
@@ -117,7 +123,7 @@ func (w *WorkerGroup) runDeleter() {
 				FileID: todo.ID,
 			}).
 			Delete(&models.Audio{}); res.Error != nil {
-			log.Printf("Failed to delete Audios from database: %v", res.Error)
+			log.Printf("[Services->Deleter->runDeleter] [ERROR]: Failed to delete Audios from database: %v", res.Error)
 			continue
 		}
 
@@ -127,7 +133,7 @@ func (w *WorkerGroup) runDeleter() {
 				FileID: todo.ID,
 			}).
 			Delete(&models.Quality{}); res.Error != nil {
-			log.Printf("Failed to delete Qualities from database: %v", res.Error)
+			log.Printf("[Services->Deleter->runDeleter] [ERROR]: Failed to delete Qualities from database: %v", res.Error)
 			continue
 		}
 
@@ -138,30 +144,30 @@ func (w *WorkerGroup) runDeleter() {
 		if todo.Path != "" {
 			if stats, err := os.Stat(todo.Path); !os.IsNotExist(err) && !stats.IsDir() {
 				if err := os.Remove(todo.Path); err != nil {
-					log.Printf("Failed to delete original file: %v", err)
+					log.Printf("[Services->Deleter->runDeleter] [ERROR]: Failed to delete original file: %v", err)
 				}
 			}
 		}
 
-		if stats, err := os.Stat(todo.Folder); !os.IsNotExist(err) && stats.IsDir() {
-			if err := os.RemoveAll(todo.Folder); err != nil {
-				log.Printf("Failed to delete folder of file: %v", err)
-			}
+		if err := w.DeleteMedia(context.Background(), todo.UUID); err != nil {
+			log.Printf("[Services->Deleter->runDeleter] [ERROR]: Failed to delete staged/published media for %s: %v", todo.UUID, err)
+			continue
 		}
+		_ = w.deps.DB.Where("file_id = ?", todo.ID).Delete(&models.PublisherTask{}).Error
 
 		// delete file from database
 		if res := w.deps.DB.
 			Unscoped().
 			Delete(&todo); res.Error != nil {
-			log.Printf("Failed to delete File from database: %v", res.Error)
+			log.Printf("[Services->Deleter->runDeleter] [ERROR]: Failed to delete File from database: %v", res.Error)
 			continue
 		}
 		successDeletion++
 	}
 	if skippingDeletion > 0 {
-		log.Printf("Skipped %d files from deletion", skippingDeletion)
+		log.Printf("[Services->Deleter->runDeleter] [INFO]: Skipped %d files from deletion", skippingDeletion)
 	}
 	if successDeletion > 0 {
-		log.Printf("Successfully deleted %d files", successDeletion)
+		log.Printf("[Services->Deleter->runDeleter] [INFO]: Successfully deleted %d files", successDeletion)
 	}
 }

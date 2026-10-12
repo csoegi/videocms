@@ -41,7 +41,7 @@ func (s *Service) GetSubtitleData(fileName string, UUID string, SUBUUID string) 
 		return http.StatusNotFound, nil, 0, 0, errors.New("subtitle doesn't exist")
 	}
 
-	fileRes := fmt.Sprintf("%s/%s/%s/%s", s.Config().FolderVideoQualitysPriv, dbLink.File.UUID, SUBUUID, fileName)
+	fileRes := fmt.Sprintf("%s/%s/%s/%s", s.Config().PublishedQualitysRoot(), dbLink.File.UUID, SUBUUID, fileName)
 
 	return http.StatusOK, &fileRes, dbLink.UserID, dbLink.FileID, nil
 }

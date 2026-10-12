@@ -76,8 +76,10 @@ FROM --platform=$TARGETPLATFORM alpine:${ALPINE_VERSION}
 
 WORKDIR /app
 
-# ✅ UPDATED: Added fontconfig and core system fonts library required by FFmpeg's video filter system for subtitle burning
-RUN apk add --no-cache ffmpeg bash fontconfig ttf-dejavu
+# ✅ UPDATED: 
+# Added fontconfig and core system fonts library required by FFmpeg's video filter system for subtitle burning
+# Added rsync, openssh-client, and sshpass for remote publishing support via SSH
+RUN apk add --no-cache ffmpeg bash fontconfig ttf-dejavu rsync openssh-client sshpass
 
 ARG VERSION=v0.0.0-dev
 ARG CHANNEL=dev
@@ -101,8 +103,10 @@ VOLUME /app/public
 VOLUME /app/database
 
 ENV Host=:3000
-ENV FolderVideoQualitysPriv=./videos/qualitys
+ENV FolderVideoQualitysPriv=./videos/staging
+ENV FolderVideoQualitysFinal=./videos/qualitys
 ENV FolderVideoQualitysPub=/videos/qualitys
+ENV PublisherMode=local
 ENV FolderVideoUploadsPriv=./videos/uploads
 ENV StatsDriveName=nvme0n1
 
