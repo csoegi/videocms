@@ -4,8 +4,8 @@ import (
 	"ch/kirari04/videocms/controllers"
 	"ch/kirari04/videocms/middlewares"
 	"fmt"
-	"time"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -32,6 +32,7 @@ func Api(apiGroup *echo.Group, handlers *controllers.Handlers, middlewareFactory
 	apiGroup.GET("/p/page", handlers.GetPublicWebPage)
 	// Analytics tracking routes
 	apiGroup.POST("/analytics/stream/:UUID", handlers.LogStreamEvent) // streaming analytics event
+	
 
 	// Routes that require to be authenticated
 	protectedApi := apiGroup.Group("",
@@ -92,7 +93,7 @@ func Api(apiGroup *echo.Group, handlers *controllers.Handlers, middlewareFactory
 	protectedApi.GET("/settings", handlers.GetSettings, middlewareFactory.IsAdmin())
 	protectedApi.PUT("/settings", handlers.UpdateSettings, middlewareFactory.IsAdmin())
 	protectedApi.POST("/settings/test-pgs-server", handlers.TestPgsServerConnection, middlewareFactory.IsAdmin())
-	protectedApi.GET("/stats/analytics", handlers.GetAnalyticsStats) // Get analytics stats, no admin required but requires analytics enabled
+	protectedApi.GET("/stats/analytics", handlers.GetAnalyticsStats)              // Get analytics stats, no admin required but requires analytics enabled
 	protectedApi.POST("/stats/analytics/refresh", handlers.RefreshAnalyticsStats) // Refresh analytics stats, no admin required but requires analytics enabled
 
 	protectedApi.GET("/users", handlers.GetUsers, middlewareFactory.IsAdmin())
@@ -130,17 +131,17 @@ func Api(apiGroup *echo.Group, handlers *controllers.Handlers, middlewareFactory
 	// Subtitles - Staging Subtitle Data During TUS Upload
 	protectedApi.POST("/subtitle/upload", handlers.SubtitleUploadController)
 
-	// Subtitles - Post-Upload Subtitle Management in Video Details Panel 
+	// Subtitles - Post-Upload Subtitle Management in Video Details Panel
 	protectedApi.POST("/video/:uuid/subtitles/upload", handlers.AddSubtitleTrackDirect)
 	protectedApi.POST("/video/:uuid/subtitles/config", handlers.UpdateVideoSubtitleConfig)
 	protectedApi.DELETE("/video/:uuid/subtitles/track/:sub_uuid", handlers.DeleteSubtitleTrackDirect)
-	
+
 	// Admin Stats
 	protectedApi.GET("/stats/remote-download", handlers.GetAdminRemoteDownloadStats, middlewareFactory.IsAdmin())
 	protectedApi.GET("/stats/remote-download/duration", handlers.GetAdminRemoteDownloadDurationStats, middlewareFactory.IsAdmin())
 	protectedApi.GET("/stats/remote-download/top", handlers.GetAdminTopRemoteDownloadStats, middlewareFactory.IsAdmin())
 
-    // Advertisements
+	// Advertisements
 	ads := protectedApi.Group("/advertisements")
 	{
 		ads.GET("", handlers.AdvertisementList)
@@ -148,14 +149,21 @@ func Api(apiGroup *echo.Group, handlers *controllers.Handlers, middlewareFactory
 		ads.PUT("/:id", handlers.AdvertisementUpdate)
 		ads.DELETE("/:id", handlers.AdvertisementDelete)
 	}
-	
-	// Local Development Fix for TUS Upload falling back from localhost:3000 to 127.0.0.1:3000 
+
+	// ⚠️ VideoCMS Importer
+	protectedApi.POST("/importer/imports", handlers.CreateVideoImport)
+	protectedApi.POST("/importer/imports/:key/complete", handlers.CompleteVideoImport)
+	// Public, rate-limited lookup used by the one-time WordPress iframe migration.
+	apiGroup.GET("/importer/iframe", handlers.ResolveImportedIframe,
+	middleware.RateLimiterWithConfig(*middlewareFactory.LimiterConfig(rate.Limit(cfg.RatelimitRateApi), cfg.RatelimitBurstApi, time.Minute*5)))
+
+	// Local Development Fix for TUS Upload falling back from localhost:3000 to 127.0.0.1:3000
 	// Browser rejects the cross-origin/mismatched IP handshake layer causing net::ERR_CONNECTION_REFUSED.
 	tusLocationFixMiddleware := func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			// 1. Let the native Tus handler run and execute its creation logic hooks first
 			err := next(c)
-			
+
 			// 2. Intercept the outbound response headers before they clear port 3000
 			location := c.Response().Header().Get("Location")
 			if location != "" {

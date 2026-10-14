@@ -264,3 +264,15 @@ func downloadSelectionTestLink() *models.Link {
 		},
 	}
 }
+
+func TestDownloadQualityOptionsIncludesReadyDirectMP4(t *testing.T) {
+	qualities := downloadQualityOptions([]models.Quality{{
+		Name: "720p", Type: "mp4", Ready: true, Height: 720, Width: 1280,
+	}})
+	if len(qualities) != 1 {
+		t.Fatalf("downloadQualityOptions() returned %d options, want 1", len(qualities))
+	}
+	if qualities[0].Type != "mp4" || qualities[0].Name != "720p" {
+		t.Fatalf("direct MP4 option = %#v", qualities[0])
+	}
+}

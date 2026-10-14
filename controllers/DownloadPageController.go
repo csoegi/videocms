@@ -15,6 +15,7 @@ type DownloadQualityOption struct {
 	Name       string
 	Dimensions string
 	Height     int64
+	Type       string
 }
 
 type DownloadTrackOption struct {
@@ -63,6 +64,15 @@ func (h *Handlers) DownloadPageController(c echo.Context) error {
 
 	qualities := downloadQualityOptions(dbLink.File.Qualitys)
 	audios := downloadAudioOptions(dbLink.File.Audios)
+
+	//⚠️ Check if video is directly imported mp4, if so, we can allow direct download without ffmpeg processing.
+	hasDirectMP4 := false
+	for _, quality := range dbLink.File.Qualitys {
+		if quality.Type == "mp4" && quality.Ready {
+			hasDirectMP4 = true
+			break
+		}
+	}
 	subtitles := downloadSubtitleOptions(dbLink.File.Subtitles)
 
 	return c.Render(http.StatusOK, "download.html", echo.Map{
@@ -77,7 +87,8 @@ func (h *Handlers) DownloadPageController(c echo.Context) error {
 		"Audios":       audios,
 		"Subtitles":    subtitles,
 		"CanDownload":  len(qualities) > 0,
-		"CanUseMP4":    len(audios) > 0,
+		"CanUseMP4":    hasDirectMP4 || len(audios) > 0,
+		"HasDirectMP4": hasDirectMP4,
 	})
 }
 
@@ -88,13 +99,18 @@ func (h *Handlers) downloadsEnabled() bool {
 func downloadQualityOptions(qualities []models.Quality) []DownloadQualityOption {
 	options := make([]DownloadQualityOption, 0, len(qualities))
 	for _, quality := range qualities {
-		if quality.Type != "hls" || !quality.Ready {
+		if (quality.Type != "hls" && quality.Type != "mp4") || !quality.Ready {
 			continue
+		}
+		dimensions := quality.Name
+		if quality.Width > 0 && quality.Height > 0 {
+			dimensions = fmt.Sprintf("%d × %d", quality.Width, quality.Height)
 		}
 		options = append(options, DownloadQualityOption{
 			Name:       quality.Name,
-			Dimensions: fmt.Sprintf("%d × %d", quality.Width, quality.Height),
+			Dimensions: dimensions,
 			Height:     quality.Height,
+			Type:       quality.Type,
 		})
 	}
 	sort.SliceStable(options, func(i, j int) bool {

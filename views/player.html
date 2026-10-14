@@ -536,6 +536,7 @@
 
         const TITLE = "{{.Title}}";
         const StreamIsReady = ("{{.StreamIsReady}}" === "true");
+        const DIRECT_MP4 = ("{{.StreamIsMP4}}" === "true");
         const FOLDER = "{{.Folder}}";
         const HLSENABLED = Hls.isSupported();
         const THUMB = "{{ .Thumbnail }}";
@@ -550,7 +551,7 @@
         Subtitles = Subtitles.filter((e) =>
             iOS() || !HLSENABLED ? e.type !== "ass" : e.type == "ass"
         );
-        let active_src = `${FOLDER}/${UUID}/stream/muted/master.m3u8`;
+        let active_src = "{{.StreamUrl}}" || `${FOLDER}/${UUID}/stream/muted/master.m3u8`;
         let active_video_el = null;
         let active_hls = null;
         let active_subtitle_index = -1;
@@ -597,6 +598,10 @@
                         name: "Disabled",
                         active: false,
                         click: () => {
+                            if (DIRECT_MP4) {
+                                renderCustomSettingOverlay(false);
+                                return;
+                            }
                             active_src = `${FOLDER}/${UUID}/stream/muted/master.m3u8`;
                             let oldPosition = active_video_el.currentTime;
                             loadResource();
@@ -1247,6 +1252,10 @@
         }
 
         function loadResource() {
+            if (DIRECT_MP4) {
+                active_video_el.src = active_src;
+                return;
+            }
             if (HLSENABLED && !iOS()) {
                 // hls.js player
                 const hls = new Hls();

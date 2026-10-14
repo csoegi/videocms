@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"time"
+	"strings"
 )
 
 func (w *WorkerGroup) EncoderCleanup(ctx context.Context) {
@@ -38,6 +39,20 @@ func (w *WorkerGroup) runEncoderCleanup() {
 	}
 
 	for _, dbReadyFile := range dbReadyFiles {
+		// ⚠️ Safeguard for imported MP4 files from Streamingplay 
+		// Streamingplay videos are imported as MP4 files and are not encoded into other formats.
+		// Skip and do not run original-source cleanup for these files.
+		hasDirectMP4 := false
+		for _, quality := range dbReadyFile.Qualitys {
+			if strings.EqualFold(quality.Type, "mp4") {
+				hasDirectMP4 = true
+				break
+			}
+		}
+		if hasDirectMP4 {
+			continue
+		}
+
 		var qualityAmount int64
 		if res := w.deps.DB.
 			Model(&models.Quality{}).
