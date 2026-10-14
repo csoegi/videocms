@@ -769,7 +769,7 @@
         <form
             id="download-form"
             class="workspace"
-            data-job-base="{{.DownloadBase}}/download-jobs"
+            data-job-base="{{.DownloadBase}}/download-jobs" data-download-base="{{.DownloadBase}}"
         >
             <input type="hidden" name="selection" value="custom" />
             <div class="options">
@@ -790,6 +790,7 @@
                                 name="quality"
                                 value="{{$quality.Name}}"
                                 data-detail="{{$quality.Dimensions}}"
+                                data-type="{{$quality.Type}}"
                                 aria-label="{{$quality.Name}}, {{$quality.Dimensions}}"
                                 {{if eq $index 0}}checked{{end}}
                                 required
@@ -845,7 +846,7 @@
                                 <span class="choice-main">
                                     <span class="choice-title">MP4</span>
                                     <span class="choice-detail">
-                                        {{if .CanUseMP4}}One audio track, no subtitles{{else}}No ready audio track{{end}}
+                                        {{if .HasDirectMP4}}Original MP4 can be downloaded directly{{else if .CanUseMP4}}One audio track, no subtitles{{else}}No ready audio track{{end}}
                                     </span>
                                 </span>
                                 <span class="choice-mark" aria-hidden="true"></span>
@@ -1098,9 +1099,12 @@
                         input.disabled = !active;
                     });
                 });
-                tracksHelp.textContent = container === "mp4"
-                    ? "MP4 requires one audio track. Subtitle selection is available with MKV."
-                    : "MKV can include any combination of ready audio and subtitle tracks.";
+                const quality = document.querySelector('input[name="quality"]:checked');
+                tracksHelp.textContent = quality?.dataset.type === "mp4"
+                    ? "This imported MP4 is downloaded as-is; its audio is already embedded."
+                    : container === "mp4"
+                        ? "MP4 requires one audio track. Subtitle selection is available with MKV."
+                        : "MKV can include any combination of ready audio and subtitle tracks.";
                 error.textContent = "";
                 updateSummary();
             };
@@ -1136,7 +1140,11 @@
                         return;
                     }
                     error.textContent = "";
-                    updateSummary();
+                    if (input.name === "quality") {
+                        setTrackMode();
+                    } else {
+                        updateSummary();
+                    }
                 });
             });
 
@@ -1403,6 +1411,16 @@
 
                 if (!quality) {
                     error.textContent = "Choose a video quality.";
+                    return;
+                }
+                if (quality.dataset.type === "mp4") {
+                    if (container !== "mp4") {
+                        error.textContent = "This imported source is already MP4. Choose MP4 to download it directly.";
+                        return;
+                    }
+                    // Imported source MP4 already contains its own audio; navigate to the
+                    // authenticated direct-serving endpoint rather than creating an FFmpeg job.
+                    window.location.href = `${form.dataset.downloadBase}/${encodeURIComponent(quality.value)}/1/stream/video.mp4?download=1`;
                     return;
                 }
                 if (container === "mp4" && audioCount !== 1) {
