@@ -3,6 +3,7 @@ package controllers
 import (
 	downloadsvc "ch/kirari04/videocms/download"
 	"ch/kirari04/videocms/helpers"
+	"ch/kirari04/videocms/middlewares"
 	"ch/kirari04/videocms/models"
 	"context"
 	"errors"
@@ -59,6 +60,41 @@ func (h *Handlers) DownloadVideoController(c echo.Context) error {
 		Where(&models.Link{UUID: requestValidation.UUID}).
 		First(&dbLink); dbRes.Error != nil {
 		return c.String(http.StatusBadRequest, "video doesn't exist")
+	}
+
+	// ⚠️ Imported MP4 files are already the final media asset. Serve them directly with
+	// net/http range support; do not invoke the HLS/audio-selection or FFmpeg pipeline.
+	for _, quality := range dbLink.File.Qualitys {
+		if quality.Name != requestValidation.QUALITY || quality.Type != "mp4" {
+			continue
+		}
+		if !quality.Ready {
+			return c.String(http.StatusConflict, "imported video is not ready")
+		}
+		claims, ok := middlewares.MediaClaims(c)
+		if !ok || claims.QualityIDs[quality.Name] != quality.ID {
+			return c.String(http.StatusForbidden, "media token does not authorize this quality")
+		}
+		filePath := filepath.Join(h.Config().PublishedQualitysRoot(), dbLink.File.UUID, quality.Name, quality.OutputFile)
+		file, err := os.Open(filePath)
+		if err != nil {
+			return c.String(http.StatusNotFound, "imported video file not found")
+		}
+		defer file.Close()
+		info, err := file.Stat()
+		if err != nil || !info.Mode().IsRegular() {
+			return c.String(http.StatusNotFound, "imported video file not found")
+		}
+		h.Logic.TrackTraffic(dbLink.File.UserID, dbLink.FileID, quality.ID, 0, uint64(info.Size()))
+		h.Logic.RecordEvent("download", requestValidation.UUID, c.RealIP(), c.Request().UserAgent())
+		c.Response().Header().Set("Accept-Ranges", "bytes")
+		c.Response().Header().Set("Content-Type", "video/mp4")
+		fileName := fmt.Sprintf("%s[%s].mp4", safeDownloadName(dbLink.Name), requestValidation.QUALITY)
+		if c.QueryParam("download") == "1" {
+			c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", fileName))
+		}
+		http.ServeContent(c.Response(), c.Request(), fileName, info.ModTime(), file)
+		return nil
 	}
 
 	selection, err := resolveDownloadSelection(

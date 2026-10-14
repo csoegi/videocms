@@ -105,10 +105,10 @@ func TestBuildPlayerStatusAllQualitiesFailed(t *testing.T) {
 	}
 }
 
-func TestBuildPlayerStatusNonHLSReadyQualityIsNotPlayable(t *testing.T) {
+func TestBuildPlayerStatusUnknownReadyQualityIsNotPlayable(t *testing.T) {
 	status := BuildPlayerStatus(playerStatusLink(
 		[]models.Quality{
-			{Name: "download", Type: "mp4", Ready: true},
+			{Name: "download", Type: "unknown", Ready: true},
 		},
 		nil,
 		nil,
@@ -133,5 +133,22 @@ func playerStatusLink(qualitys []models.Quality, audios []models.Audio, subtitle
 			Audios:    audios,
 			Subtitles: subtitles,
 		},
+	}
+}
+
+func TestBuildPlayerStatusReadyDirectMP4IsPlayable(t *testing.T) {
+	status := BuildPlayerStatus(playerStatusLink(
+		[]models.Quality{{Name: "720p", Type: "mp4", Ready: true}},
+		nil,
+		nil,
+	))
+	if !status.Ready {
+		t.Fatal("expected a ready direct MP4 quality to make player ready")
+	}
+	if status.State != PlayerStateReady {
+		t.Fatalf("state = %q, want %q", status.State, PlayerStateReady)
+	}
+	if status.ReadyQualityCount != 1 || status.TotalQualityCount != 1 {
+		t.Fatalf("quality counts = %d/%d, want 1/1", status.ReadyQualityCount, status.TotalQualityCount)
 	}
 }

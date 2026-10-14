@@ -65,6 +65,29 @@ func TestMigrateModelsPreservesLegacyWebPages(t *testing.T) {
 		t.Fatalf("MigrateModels() error = %v", err)
 	}
 
+	// Import support is additive: it creates its own table and does not require
+	// adding idempotency columns to legacy media tables.
+	if !db.Migrator().HasTable(&models.VideoImport{}) {
+		t.Fatal("expected additive video_imports table to be created")
+	}
+	if db.Migrator().HasColumn(&models.File{}, "ImportKey") {
+		t.Fatal("File schema must not gain an ImportKey column")
+	}
+	firstImport := models.VideoImport{
+		UserID: 7, RequestID: "b9dbdd50-6d4e-4d25-a96d-7dcb6c93e17b",
+		ImportKey: "e86cb31a-a46f-4f15-9a1e-ae45d3f44222", FileUUID: "7b90cc6e-7d4b-4c8e-a0c8-9d5f4c04d77e",
+		LinkUUID: "9c24efaa-bb08-41d4-83c9-59b83f8e2c2d", Status: "pending",
+	}
+	if err := db.Create(&firstImport).Error; err != nil {
+		t.Fatalf("create video import: %v", err)
+	}
+	duplicateRequest := firstImport
+	duplicateRequest.ID = 0
+	duplicateRequest.ImportKey = "0ec6e019-f94d-4d36-a0c9-b3adac54f1f1"
+	if err := db.Create(&duplicateRequest).Error; err == nil {
+		t.Fatal("expected duplicate (user_id, request_id) to be rejected")
+	}
+
 	var page models.WebPage
 	if err := db.First(&page).Error; err != nil {
 		t.Fatalf("load migrated webpage: %v", err)

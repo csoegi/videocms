@@ -1,18 +1,18 @@
 package controllers
 
 import (
-	"html/template"
 	"ch/kirari04/videocms/auth"
 	"ch/kirari04/videocms/helpers"
 	"ch/kirari04/videocms/models"
 	"encoding/base64"
 	"encoding/json"
-	"path/filepath"
 	"fmt"
+	"html/template"
 	"log"
 	"math"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -78,7 +78,7 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 		if errSub := h.Deps.DB.Where("file_id = ?", targetFileID).Find(&explicitSubtitles).Error; errSub == nil {
 			// Overwrite the subtitles list framework dynamically in memory
 			dbLink.File.Subtitles = explicitSubtitles
-			
+
 			log.Printf("[PlayerController] [SUCCESS] Successfully loaded %d soft subtitle tracks for File ID: %d", len(explicitSubtitles), targetFileID)
 		}
 	} else {
@@ -95,6 +95,7 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 	var jsonAudios []map[string]string
 	var jsonWebhooks []map[string]any
 	var streamUrl, streamUrlWidth, streamUrlHeight, firstAudio string
+	var streamIsMP4 bool
 
 	mediaToken, mediaExpiration, err := h.Auth.GenerateMediaToken(buildMediaClaims(dbLink))
 	if err != nil {
@@ -102,28 +103,64 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 	}
 	c.SetCookie(h.mediaCookie(c, dbLink.UUID, mediaToken, mediaExpiration))
 
-	// List ready HLS qualitys and check if a playable stream exists.
+	// ⚠️ Handle hls/mp4 stream URLs for the player. 
+	// If the video has HLS renditions, use the adaptive HLS master playlist URL.
+	// Imported direct-MP4 assets have no HLS renditions, so fall back to their progressive MP4 URL.
+	var hlsStreamURL, mp4StreamURL string
+	var hlsStreamWidth, hlsStreamHeight, mp4StreamWidth, mp4StreamHeight string
 	for _, qualiItem := range dbLink.File.Qualitys {
-		if qualiItem.Type == "hls" && qualiItem.Ready {
-			jsonQualitys = append(jsonQualitys, map[string]string{
-				"url":    fmt.Sprintf("%s/%s/%s/1/stream/video.mp4", h.Config().FolderVideoQualitysPub, dbLink.UUID, qualiItem.Name),
-				"label":  qualiItem.Name,
-				"height": strconv.Itoa(int(qualiItem.Height)),
-				"width":  strconv.Itoa(int(qualiItem.Width)),
-			})
-			streamUrl = fmt.Sprintf("%s/%s/%s/1/stream/video.mp4", h.Config().FolderVideoQualitysPub, dbLink.UUID, qualiItem.Name)
-			streamUrlHeight = strconv.Itoa(int(qualiItem.Height))
-			streamUrlWidth = strconv.Itoa(int(qualiItem.Width))
+		if !qualiItem.Ready {
+			continue
 		}
+
+		var mediaURL string
+		switch strings.ToLower(qualiItem.Type) {
+		case "hls":
+			mediaURL = fmt.Sprintf("%s/%s/stream/multi/master.m3u8", h.Config().FolderVideoQualitysPub, dbLink.UUID)
+			if hlsStreamURL == "" {
+				hlsStreamURL = mediaURL
+				hlsStreamWidth = strconv.Itoa(int(qualiItem.Width))
+				hlsStreamHeight = strconv.Itoa(int(qualiItem.Height))
+			}
+		case "mp4":
+			mediaURL = fmt.Sprintf("%s/%s/%s/1/stream/video.mp4", h.Config().FolderVideoQualitysPub, dbLink.UUID, qualiItem.Name)
+			if mp4StreamURL == "" {
+				mp4StreamURL = mediaURL
+				mp4StreamWidth = strconv.Itoa(int(qualiItem.Width))
+				mp4StreamHeight = strconv.Itoa(int(qualiItem.Height))
+			}
+		default:
+			continue
+		}
+
+		jsonQualitys = append(jsonQualitys, map[string]string{
+			"url":    mediaURL,
+			"label":  qualiItem.Name,
+			"height": strconv.Itoa(int(qualiItem.Height)),
+			"width":  strconv.Itoa(int(qualiItem.Width)),
+		})
+	}
+
+	// Prefer HLS when it exists (including future re-encoded renditions); otherwise use direct MP4.
+	if hlsStreamURL != "" {
+		streamUrl = hlsStreamURL
+		streamIsMP4 = false
+		streamUrlWidth = hlsStreamWidth
+		streamUrlHeight = hlsStreamHeight
+	} else if mp4StreamURL != "" {
+		streamUrl = mp4StreamURL
+		streamIsMP4 = true
+		streamUrlWidth = mp4StreamWidth
+		streamUrlHeight = mp4StreamHeight
 	}
 
 	// 🌟 Load ONLY soft-burned subtitle tracks, hard-burned subtitle is already baked into the video
 	if dbLink.File.SubtitleMode != "hard" {
 		for _, subItem := range dbLink.File.Subtitles {
 			if subItem.Ready {
-				
+
 				subPath := filepath.Join(subItem.Path, subItem.OutputFile)
-				
+
 				if subContent, err := os.ReadFile(subPath); err == nil {
 					subText := string(subContent)
 					isSRT := strings.HasSuffix(strings.ToLower(subItem.OutputFile), ".srt")
@@ -134,7 +171,7 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 
 					jsonSubtitles = append(jsonSubtitles, map[string]string{
 						"data": base64.StdEncoding.EncodeToString([]byte(subText)),
-						"type": "vtt", 
+						"type": "vtt",
 						"name": subItem.Name,
 						"lang": subItem.Lang,
 					})
@@ -143,7 +180,7 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 				}
 			}
 		}
-	} 
+	}
 
 	// List audios
 	for _, audioItem := range dbLink.File.Audios {
@@ -184,10 +221,10 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 	// Read  the configuration snapshot
 	snapshotConfig := h.Config()
 
-	// Determine if we should show ads: if AdsVisibility global setting is true and CMS user is non logged-in user, 
+	// Determine if we should show ads: if AdsVisibility global setting is true and CMS user is non logged-in user,
 	// logged-in users will send bypass_ads=true to skip ads)
 	showAds := snapshotConfig.AdsVisibility && c.QueryParam("bypass_ads") != "true"
-	
+
 	if showAds {
 		// Identify device category (mobile, desktop, tablet) based on User-Agent
 		device := helpers.GetDeviceCategory(c.Request().UserAgent())
@@ -197,7 +234,7 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 		// 2. Is Active
 		// 3. Matches the device category or is set to 'all'
 		// 4. Sorted by Priority (High to Low), then Random
-		h.Deps.DB.Where("user_id = ? AND is_active = ? AND ads_device IN (?, 'all')", 
+		h.Deps.DB.Where("user_id = ? AND is_active = ? AND ads_device IN (?, 'all')",
 			dbLink.UserID, true, device).
 			Order("ads_priority DESC, RANDOM()").
 			First(&activeAd)
@@ -242,6 +279,7 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 		"Description":                  fmt.Sprintf("Watch %s on %s", dbLink.Name, h.Config().AppName),
 		"Thumbnail":                    h.Logic.ResolvedThumbnailURL(*dbLink),
 		"StreamUrl":                    template.HTML(streamUrl),
+		"StreamIsMP4":                  streamIsMP4,
 		"StreamUrlWidth":               streamUrlWidth,
 		"StreamUrlHeight":              streamUrlHeight,
 		"Width":                        dbLink.File.Width,
@@ -262,19 +300,19 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 		"DownloadEnabled":              downloadsEnabled,
 		"ContinueWatchingPopupEnabled": continueWatchingPopupEnabled,
 		// --- Ads Settings ---
-		"HasAds":         				activeAd.ID > 0, // GORM ID > 0 means a record was found
-		"AdsType":        				activeAd.AdsType,
-		"AdsLink":        				activeAd.AdsLink,
-		"AdsDisplay":     				activeAd.AdsDisplay,
-		"AdsSkipSeconds": 				snapshotConfig.AdsSkipSeconds,
+		"HasAds":         activeAd.ID > 0, // GORM ID > 0 means a record was found
+		"AdsType":        activeAd.AdsType,
+		"AdsLink":        activeAd.AdsLink,
+		"AdsDisplay":     activeAd.AdsDisplay,
+		"AdsSkipSeconds": snapshotConfig.AdsSkipSeconds,
 		// --- Watermark Settings ---
-		"WatermarkEnabled":         	snapshotConfig.WatermarkEnabled,
-		"WatermarkType":        		snapshotConfig.WatermarkType,
-		"WatermarkText":        		snapshotConfig.WatermarkText,
-		"WatermarkImageLink":     		snapshotConfig.WatermarkImageLink,
-		"WatermarkPosition": 			snapshotConfig.WatermarkPosition,
-		"WatermarkMargin": 				snapshotConfig.WatermarkMargin,
-		"WatermarkTransparency": 		snapshotConfig.WatermarkTransparency,
+		"WatermarkEnabled":      snapshotConfig.WatermarkEnabled,
+		"WatermarkType":         snapshotConfig.WatermarkType,
+		"WatermarkText":         snapshotConfig.WatermarkText,
+		"WatermarkImageLink":    snapshotConfig.WatermarkImageLink,
+		"WatermarkPosition":     snapshotConfig.WatermarkPosition,
+		"WatermarkMargin":       snapshotConfig.WatermarkMargin,
+		"WatermarkTransparency": snapshotConfig.WatermarkTransparency,
 	})
 }
 
@@ -360,7 +398,7 @@ func BuildPlayerStatus(dbLink *models.Link) PlayerStatusResponse {
 	var activeTask bool
 
 	for _, quality := range dbLink.File.Qualitys {
-		if quality.Type != "hls" {
+		if quality.Type != "hls" && quality.Type != "mp4" {
 			continue
 		}
 

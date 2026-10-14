@@ -367,7 +367,7 @@
         {{ if .StreamIsReady }}
         <media-player
             title="{{ .Title }}"
-            src="{{.Folder}}/{{.UUID}}/stream/multi/master.m3u8"
+            src="{{.StreamUrl}}"
             poster="{{ .Thumbnail }}"
             view-type="video"
             crossorigin
@@ -579,7 +579,11 @@
         }
 
         // --- Setup Source ---
-        let streamUrl = `${FOLDER}/${UUID}/stream/multi/master.m3u8`;
+        const STREAM_IS_MP4 = ("{{.StreamIsMP4}}" === "true");
+        // Go supplies the correct URL: authenticated MP4 for imported assets, HLS master for encoded assets.
+        // Do not fall back to HLS for an MP4 source; that would request a non-existent playlist.
+        let streamUrl = "{{.StreamUrl}}" || (STREAM_IS_MP4 ? "" : `${FOLDER}/${UUID}/stream/multi/master.m3u8`);
+        if (!streamUrl) console.error("[Player_v2] No playback URL was supplied by VideoCMS for this ready MP4 asset.");
 
         const player = document.querySelector('media-player');
         
@@ -599,8 +603,9 @@
         let movieStarted = false;
 
         function initAds() {
-            // 1. Initial State: Load the movie and show the thumbnail
-            player.src = streamUrl;
+            // 1. Initial State: load only the source selected by VideoCMS. The media-player
+            // element already has the same URL, so avoid needlessly resetting its source.
+            if (streamUrl && player.src !== streamUrl) player.src = streamUrl;
             player.poster = THUMB;
             
             // 2. If bypass-ads querystring for loggedin CMS user is set, skip all ad logic
