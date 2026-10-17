@@ -86,7 +86,122 @@ func (w *WorkerGroup) ResetEncodingState() {
 	}
 }
 
+// repairFilesMissingVideoQuality repairs only files that have pending
+// encodable audio/internal-subtitle rows, no quality rows at all, and a still-
+// present source file. It never changes an existing direct MP4/MKV quality or
+// an existing failed quality, so it is safe to run during regular queue polls.
+func (w *WorkerGroup) repairFilesMissingVideoQuality() {
+	cfg := w.Config()
+	if cfg.EncodingEnabled == nil || !*cfg.EncodingEnabled {
+		return
+	}
+	w.missingQualityRepairMu.Lock()
+	defer w.missingQualityRepairMu.Unlock()
+
+	var profiles []models.AvailableQuality
+	for _, profile := range w.deps.Qualities() {
+		if profile.Enabled && strings.EqualFold(profile.Type, "hls") && profile.Width > 0 && profile.Height > 0 && profile.OutputFile != "" && profile.FolderName != "" {
+			profiles = append(profiles, profile)
+		}
+	}
+	if len(profiles) == 0 {
+		return
+	}
+	profile := profiles[0]
+	profileArea := profile.Width * profile.Height
+	for _, candidate := range profiles[1:] {
+		area := candidate.Width * candidate.Height
+		if area < profileArea {
+			profile, profileArea = candidate, area
+		}
+	}
+
+	fileIDs := make(map[uint]struct{})
+	var audioFileIDs []uint
+	if err := w.deps.DB.Model(&models.Audio{}).
+		Where("publishing = ? AND ready = ? AND failed = ?", false, false, false).
+		Distinct().Pluck("file_id", &audioFileIDs).Error; err != nil {
+		log.Printf("[Services->Encoder->repairFilesMissingVideoQuality] Failed to find pending audio files: %v", err)
+		return
+	}
+	for _, fileID := range audioFileIDs {
+		fileIDs[fileID] = struct{}{}
+	}
+	var subtitleFileIDs []uint
+	if err := w.deps.DB.Model(&models.Subtitle{}).
+		Where("publishing = ? AND ready = ? AND failed = ? AND COALESCE(source, '') <> ?", false, false, false, "external").
+		Distinct().Pluck("file_id", &subtitleFileIDs).Error; err != nil {
+		log.Printf("[Services->Encoder->repairFilesMissingVideoQuality] Failed to find pending internal subtitle files: %v", err)
+		return
+	}
+	for _, fileID := range subtitleFileIDs {
+		fileIDs[fileID] = struct{}{}
+	}
+
+	for fileID := range fileIDs {
+		var qualityCount int64
+		if err := w.deps.DB.Model(&models.Quality{}).Where("file_id = ?", fileID).Count(&qualityCount).Error; err != nil || qualityCount != 0 {
+			continue
+		}
+
+		var file models.File
+		if err := w.deps.DB.First(&file, fileID).Error; err != nil {
+			continue
+		}
+		// CreateFile persists the File before it inserts audio/subtitle/quality
+		// rows. Give a new ingestion time to finish its transaction-like sequence
+		// before treating the temporary no-quality window as a stuck legacy file.
+		if !file.CreatedAt.IsZero() && file.CreatedAt.After(time.Now().Add(-time.Minute)) {
+			continue
+		}
+		if file.DeletedAt != nil && file.DeletedAt.Valid {
+			continue
+		}
+		if file.Path == "" || file.Width < 50 || file.Height < 50 {
+			continue
+		}
+		if info, err := os.Stat(file.Path); err != nil || !info.Mode().IsRegular() {
+			// Never invent an encoder job if the original source has already been
+			// cleaned up or is unavailable on this host.
+			continue
+		}
+
+		nativeWidth := file.Width / 2 * 2
+		nativeHeight := file.Height / 2 * 2
+		if nativeWidth < 2 || nativeHeight < 2 {
+			continue
+		}
+		qualityName := fmt.Sprintf("%dp", nativeHeight)
+		frameRate := file.AvgFrameRate
+		if cfg.MaxFramerate > 0 && frameRate > float64(cfg.MaxFramerate) {
+			frameRate = float64(cfg.MaxFramerate)
+		}
+		quality := models.Quality{
+			FileID: file.ID, Name: qualityName,
+			Width: nativeWidth, Height: nativeHeight,
+			VideoBitrate: profile.VideoBitrate, AudioBitrate: profile.AudioBitrate,
+			Profile: profile.Profile, Level: profile.Level,
+			CodecStringAVC: profile.CodecStringAVC, Crf: profile.Crf,
+			Type: "hls", Muted: profile.Muted, AvgFrameRate: frameRate,
+			Path:       filepath.Join(cfg.FolderVideoQualitysPriv, file.UUID, qualityName),
+			OutputFile: profile.OutputFile,
+			Encoding:   false, Publishing: false, Failed: false, Ready: false,
+			Progress: 0, Error: "",
+		}
+		if err := w.deps.DB.Create(&quality).Error; err != nil {
+			log.Printf("[Services->Encoder->repairFilesMissingVideoQuality] Failed to add fallback quality for file %s: %v", file.UUID, err)
+			continue
+		}
+		log.Printf("[Services->Encoder->repairFilesMissingVideoQuality] Repaired file %s with native-resolution HLS quality %s", file.UUID, qualityName)
+	}
+}
+
 func (w *WorkerGroup) loadEncodingTasks(ctx context.Context) {
+	// Repair legacy/stuck files created before the native-resolution fallback
+	// existed. These files have unfinished audio/subtitle rows but no video
+	// quality row, so the publisher can never consider the file complete.
+	w.repairFilesMissingVideoQuality()
+
 	var encodingTasks []EncodingTask
 
 	// SUBTITLES

@@ -68,6 +68,7 @@ func (h *Handlers) CreateRemoteDownload(c echo.Context) error {
 				ParentFolderID: req.ParentFolderID,
 				Url:            strings.TrimSpace(rawURL),
 				Status:         models.RemoteDownloadStatusPending,
+				Stage:          "Queued",
 				Progress:       0,
 			}
 			if res := tx.Create(&download); res.Error != nil {
@@ -234,6 +235,7 @@ func (h *Handlers) retryRemoteDownload(userID uint, downloadID uint) (*models.Re
 
 	if res := h.Deps.DB.Model(&download).Updates(map[string]interface{}{
 		"status":              models.RemoteDownloadStatusPending,
+		"stage":               "Queued",
 		"progress":            0,
 		"error":               "",
 		"temp_path":           "",

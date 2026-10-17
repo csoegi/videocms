@@ -62,10 +62,18 @@ func (h *Handlers) DownloadVideoController(c echo.Context) error {
 		return c.String(http.StatusBadRequest, "video doesn't exist")
 	}
 
-	// ⚠️ Imported MP4 files are already the final media asset. Serve them directly with
-	// net/http range support; do not invoke the HLS/audio-selection or FFmpeg pipeline.
+	// The route suffix determines the requested output container. Direct media
+	// can be served as-is when source and target match; otherwise use a
+	// stream-copy remux, optionally adding user-selected sidecar subtitles.
+	targetContainer := strings.TrimPrefix(strings.ToLower(filepath.Ext(c.Request().URL.Path)), ".")
+	if targetContainer != "mp4" && targetContainer != "mkv" {
+		return c.String(http.StatusBadRequest, "unsupported output container")
+	}
+	requestedSubtitleUUIDs := requestedSubtitleIDs(c)
+
 	for _, quality := range dbLink.File.Qualitys {
-		if quality.Name != requestValidation.QUALITY || quality.Type != "mp4" {
+		qualityType := strings.ToLower(quality.Type)
+		if quality.Name != requestValidation.QUALITY || (qualityType != "mp4" && qualityType != "mkv") {
 			continue
 		}
 		if !quality.Ready {
@@ -75,25 +83,73 @@ func (h *Handlers) DownloadVideoController(c echo.Context) error {
 		if !ok || claims.QualityIDs[quality.Name] != quality.ID {
 			return c.String(http.StatusForbidden, "media token does not authorize this quality")
 		}
-		filePath := filepath.Join(h.Config().PublishedQualitysRoot(), dbLink.File.UUID, quality.Name, quality.OutputFile)
-		file, err := os.Open(filePath)
-		if err != nil {
+		filePath := filepath.Join(h.Config().PublishedQualitysRoot(), dbLink.File.UUID, filepath.Base(quality.Name), filepath.Base(quality.OutputFile))
+		info, statErr := os.Stat(filePath)
+		if statErr != nil || !info.Mode().IsRegular() {
 			return c.String(http.StatusNotFound, "imported video file not found")
+		}
+
+		selectedSubtitles, err := resolveDirectDownloadSubtitles(dbLink.File.Subtitles, dbLink.FileID, requestedSubtitleUUIDs)
+		if err != nil {
+			return c.String(http.StatusBadRequest, err.Error())
+		}
+		if targetContainer == "mp4" && len(selectedSubtitles) > 0 {
+			return c.String(http.StatusBadRequest, "external subtitles can only be included in MKV downloads")
+		}
+
+		fileExtension := "." + targetContainer
+		fileName := fmt.Sprintf("%s[%s]%s", safeDownloadName(dbLink.Name), requestValidation.QUALITY, fileExtension)
+		contentType := "video/mp4"
+		if targetContainer == "mkv" {
+			contentType = "video/x-matroska"
+		}
+
+		if targetContainer == qualityType && len(selectedSubtitles) == 0 {
+			file, err := os.Open(filePath)
+			if err != nil {
+				return c.String(http.StatusNotFound, "imported video file not found")
+			}
+			defer file.Close()
+			if c.QueryParam("download") == "1" {
+				c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", fileName))
+			}
+			c.Response().Header().Set("Content-Type", contentType)
+			c.Response().Header().Set("Accept-Ranges", "bytes")
+			h.Logic.TrackTraffic(dbLink.File.UserID, dbLink.FileID, quality.ID, 0, uint64(info.Size()))
+			h.Logic.RecordEvent("download", requestValidation.UUID, c.RealIP(), c.Request().UserAgent())
+			http.ServeContent(c.Response(), c.Request(), fileName, info.ModTime(), file)
+			return nil
+		}
+
+		tmpPath := filepath.Join(h.Config().FolderVideoUploadsPriv, fmt.Sprintf("%s-download.%s", uuid.NewString(), targetContainer))
+		defer os.Remove(tmpPath)
+		if err := os.MkdirAll(filepath.Dir(tmpPath), 0755); err != nil {
+			return c.String(http.StatusInternalServerError, "failed to prepare converted download")
+		}
+		if err := remuxDirectMediaDownload(c.Request().Context(), filePath, tmpPath, targetContainer, selectedSubtitles); err != nil {
+			if errors.Is(c.Request().Context().Err(), context.Canceled) {
+				return nil
+			}
+			c.Logger().Errorf("Failed to remux direct media to %s: %v", targetContainer, err)
+			return c.String(http.StatusUnprocessableEntity, fmt.Sprintf("cannot convert this video to %s without re-encoding: %v", strings.ToUpper(targetContainer), err))
+		}
+		file, err := os.Open(tmpPath)
+		if err != nil {
+			return c.String(http.StatusInternalServerError, "failed to open converted video")
 		}
 		defer file.Close()
-		info, err := file.Stat()
-		if err != nil || !info.Mode().IsRegular() {
-			return c.String(http.StatusNotFound, "imported video file not found")
+		convertedInfo, err := file.Stat()
+		if err != nil || !convertedInfo.Mode().IsRegular() {
+			return c.String(http.StatusInternalServerError, "failed to inspect converted video")
 		}
-		h.Logic.TrackTraffic(dbLink.File.UserID, dbLink.FileID, quality.ID, 0, uint64(info.Size()))
-		h.Logic.RecordEvent("download", requestValidation.UUID, c.RealIP(), c.Request().UserAgent())
-		c.Response().Header().Set("Accept-Ranges", "bytes")
-		c.Response().Header().Set("Content-Type", "video/mp4")
-		fileName := fmt.Sprintf("%s[%s].mp4", safeDownloadName(dbLink.Name), requestValidation.QUALITY)
 		if c.QueryParam("download") == "1" {
 			c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", fileName))
 		}
-		http.ServeContent(c.Response(), c.Request(), fileName, info.ModTime(), file)
+		c.Response().Header().Set("Content-Type", contentType)
+		c.Response().Header().Set("Accept-Ranges", "bytes")
+		h.Logic.TrackTraffic(dbLink.File.UserID, dbLink.FileID, quality.ID, 0, uint64(convertedInfo.Size()))
+		h.Logic.RecordEvent("download", requestValidation.UUID, c.RealIP(), c.Request().UserAgent())
+		http.ServeContent(c.Response(), c.Request(), fileName, convertedInfo.ModTime(), file)
 		return nil
 	}
 
@@ -184,4 +240,108 @@ func safeDownloadName(name string) string {
 		return "video"
 	}
 	return safe
+}
+
+func requestedSubtitleIDs(c echo.Context) []string {
+	values := append([]string{}, c.QueryParams()["subtitleUUID"]...)
+	values = append(values, c.QueryParams()["subtitleUUIDs"]...)
+	seen := make(map[string]struct{}, len(values))
+	ids := make([]string, 0, len(values))
+	for _, value := range values {
+		for _, id := range strings.Split(value, ",") {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			if _, exists := seen[id]; exists {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func resolveDirectDownloadSubtitles(all []models.Subtitle, fileID uint, requested []string) ([]models.Subtitle, error) {
+	if len(requested) == 0 {
+		return nil, nil
+	}
+	byUUID := make(map[string]models.Subtitle, len(all))
+	for _, sub := range all {
+		if sub.FileID == fileID && sub.Ready && !sub.Failed {
+			byUUID[sub.UUID] = sub
+		}
+	}
+	resolved := make([]models.Subtitle, 0, len(requested))
+	for _, id := range requested {
+		sub, ok := byUUID[id]
+		if !ok {
+			return nil, fmt.Errorf("subtitle %s is not a ready subtitle for this video", id)
+		}
+		if sub.Path == "" || filepath.Base(sub.OutputFile) == "." || filepath.Base(sub.OutputFile) == "" {
+			return nil, fmt.Errorf("subtitle %s has an invalid media path", id)
+		}
+		resolved = append(resolved, sub)
+	}
+	return resolved, nil
+}
+
+func remuxDirectMediaDownload(ctx context.Context, sourcePath, outputPath, container string, subtitles []models.Subtitle) error {
+	if container != "mp4" && container != "mkv" {
+		return fmt.Errorf("unsupported output container %q", container)
+	}
+	args := []string{"-hide_banner", "-loglevel", "error", "-y", "-i", sourcePath}
+	for _, sub := range subtitles {
+		subPath := filepath.Join(sub.Path, filepath.Base(sub.OutputFile))
+		if info, err := os.Stat(subPath); err != nil || !info.Mode().IsRegular() {
+			return fmt.Errorf("subtitle file is unavailable: %s", sub.Name)
+		}
+		args = append(args, "-i", subPath)
+	}
+	args = append(args, "-map", "0:v:0")
+	if container == "mp4" {
+		// The download UI intentionally limits MP4 to a single audio track.
+		args = append(args, "-map", "0:a:0?")
+	} else {
+		args = append(args, "-map", "0:a?")
+	}
+	args = append(args, "-map_metadata", "0", "-map_chapters", "0", "-c", "copy")
+	if len(subtitles) > 0 {
+		if container == "mp4" {
+			return errors.New("external subtitles are not supported in MP4 output")
+		}
+		for i := range subtitles {
+			args = append(args, "-map", fmt.Sprintf("%d:0", i+1))
+		}
+		args = append(args, "-c:s", "srt")
+		for i, sub := range subtitles {
+			args = append(args, fmt.Sprintf("-metadata:s:s:%d", i), "language="+safeFFmpegMetadata(sub.Lang))
+			args = append(args, fmt.Sprintf("-metadata:s:s:%d", i), "title="+safeFFmpegMetadata(sub.Name))
+			if i == 0 {
+				args = append(args, "-disposition:s:0", "default")
+			}
+		}
+	}
+	if container == "mp4" {
+		args = append(args, "-movflags", "+faststart", "-f", "mp4", outputPath)
+	} else {
+		args = append(args, "-f", "matroska", outputPath)
+	}
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ffmpeg remux failed: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	info, err := os.Stat(outputPath)
+	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+		return errors.New("ffmpeg did not produce a valid output file")
+	}
+	return nil
+}
+
+func safeFFmpegMetadata(value string) string {
+	value = strings.ReplaceAll(value, "\r", " ")
+	value = strings.ReplaceAll(value, "\n", " ")
+	return strings.TrimSpace(value)
 }

@@ -20,7 +20,8 @@ type RemoteDownload struct {
 	ParentFolderID    uint    `gorm:"index"`
 	Url               string  `gorm:"size:2048;"`
 	Name              string  `gorm:"size:128;"`
-	Status            string  `gorm:"size:32;"` // pending, downloading, importing, completed, failed, canceling, canceled
+	Stage             string  `gorm:"size:128;"` // Human-readable processing stage, independent of byte progress.
+	Status            string  `gorm:"size:32;"`  // pending, downloading, importing, completed, failed, canceling, canceled
 	Progress          float64 // 0.0 to 1.0
 	Error             string  `gorm:"size:1024;"`
 	TempPath          string  `gorm:"size:1024;" json:"-"`

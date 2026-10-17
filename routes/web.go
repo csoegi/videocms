@@ -35,6 +35,7 @@ func Web(app *echo.Echo, handlers *controllers.Handlers, middlewareFactory *midd
 	videoData.GET("/:UUID/download-jobs/:JOBUUID", handlers.GetDownloadJob, middlewareFactory.MediaAuth())
 	videoData.GET("/:UUID/download-jobs/:JOBUUID/file", handlers.DownloadPreparedFile, middlewareFactory.MediaAuth())
 	videoData.GET("/:UUID/:QUALITY/:STREAM/stream/video.mp4", handlers.DownloadVideoController, middlewareFactory.MediaAuth())
+	videoData.GET("/:UUID/:QUALITY/:STREAM/stream/video.mkv", handlers.DownloadVideoController, middlewareFactory.MediaAuth())
 	videoData.GET("/:UUID/:QUALITY/:FILE", handlers.GetVideoData, middlewareFactory.MediaAuth())
 	videoData.GET("/:UUID/:AUDIOUUID/audio/:FILE", handlers.GetAudioData, middlewareFactory.MediaAuth())
 }
