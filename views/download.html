@@ -1086,6 +1086,7 @@
             let networkBackoff = 2;
             let autoStartedJobId = null;
             let latestJob = null;
+            let containerManuallyChanged = false;
 
             const activeContainer = () =>
                 document.querySelector('input[name="container"]:checked')?.value || "mkv";
@@ -1100,8 +1101,11 @@
                     });
                 });
                 const quality = document.querySelector('input[name="quality"]:checked');
-                tracksHelp.textContent = quality?.dataset.type === "mp4"
-                    ? "This imported MP4 is downloaded as-is; its audio is already embedded."
+                const sourceType = quality?.dataset.type;
+                tracksHelp.textContent = sourceType === "mp4" || sourceType === "mkv"
+                    ? (container === sourceType
+                        ? `The original ${sourceType.toUpperCase()} can be downloaded without remuxing.`
+                        : `The source ${sourceType.toUpperCase()} will be remuxed to ${container.toUpperCase()} without video re-encoding when the codecs are compatible.`)
                     : container === "mp4"
                         ? "MP4 requires one audio track. Subtitle selection is available with MKV."
                         : "MKV can include any combination of ready audio and subtitle tracks.";
@@ -1136,11 +1140,17 @@
             document.querySelectorAll("input").forEach((input) => {
                 input.addEventListener("change", () => {
                     if (input.name === "container") {
+                        containerManuallyChanged = true;
                         setTrackMode();
                         return;
                     }
                     error.textContent = "";
                     if (input.name === "quality") {
+                        const selectedQuality = document.querySelector('input[name="quality"]:checked');
+                        if (!containerManuallyChanged && ["mp4", "mkv"].includes(selectedQuality?.dataset.type)) {
+                            const matchingContainer = document.querySelector(`input[name="container"][value="${selectedQuality.dataset.type}"]`);
+                            if (matchingContainer && !matchingContainer.disabled) matchingContainer.checked = true;
+                        }
                         setTrackMode();
                     } else {
                         updateSummary();
@@ -1413,14 +1423,18 @@
                     error.textContent = "Choose a video quality.";
                     return;
                 }
-                if (quality.dataset.type === "mp4") {
-                    if (container !== "mp4") {
-                        error.textContent = "This imported source is already MP4. Choose MP4 to download it directly.";
-                        return;
+                if (quality.dataset.type === "mp4" || quality.dataset.type === "mkv") {
+                    // Same-container downloads can be served directly. If the user
+                    // requests the other container, the backend remuxes with stream
+                    // copy and can attach the selected external subtitles to MKV.
+                    const params = new URLSearchParams();
+                    params.set("download", "1");
+                    if (container === "mkv") {
+                        selectedValues('input[name="subtitle"]').forEach((subtitleUUID) => {
+                            params.append("subtitleUUID", subtitleUUID);
+                        });
                     }
-                    // Imported source MP4 already contains its own audio; navigate to the
-                    // authenticated direct-serving endpoint rather than creating an FFmpeg job.
-                    window.location.href = `${form.dataset.downloadBase}/${encodeURIComponent(quality.value)}/1/stream/video.mp4?download=1`;
+                    window.location.href = `${form.dataset.downloadBase}/${encodeURIComponent(quality.value)}/1/stream/video.${container}?${params.toString()}`;
                     return;
                 }
                 if (container === "mp4" && audioCount !== 1) {
@@ -1489,6 +1503,11 @@
                 }
             });
 
+            const initialQuality = document.querySelector('input[name="quality"]:checked');
+            if (["mp4", "mkv"].includes(initialQuality?.dataset.type)) {
+                const matchingContainer = document.querySelector(`input[name="container"][value="${initialQuality.dataset.type}"]`);
+                if (matchingContainer && !matchingContainer.disabled) matchingContainer.checked = true;
+            }
             setTrackMode();
             const restoredJobId = new URL(window.location.href).searchParams.get("job");
             if (restoredJobId) {

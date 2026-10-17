@@ -152,3 +152,20 @@ func TestBuildPlayerStatusReadyDirectMP4IsPlayable(t *testing.T) {
 		t.Fatalf("quality counts = %d/%d, want 1/1", status.ReadyQualityCount, status.TotalQualityCount)
 	}
 }
+
+func TestBuildPlayerStatusReadyDirectMKVIsPlayable(t *testing.T) {
+	status := BuildPlayerStatus(playerStatusLink(
+		[]models.Quality{{Name: "1080p", Type: "mkv", Ready: true}},
+		nil,
+		nil,
+	))
+	if !status.Ready {
+		t.Fatal("expected a ready direct MKV quality to make player ready")
+	}
+	if status.State != PlayerStateReady {
+		t.Fatalf("state = %q, want %q", status.State, PlayerStateReady)
+	}
+	if status.ReadyQualityCount != 1 || status.TotalQualityCount != 1 {
+		t.Fatalf("quality counts = %d/%d, want 1/1", status.ReadyQualityCount, status.TotalQualityCount)
+	}
+}

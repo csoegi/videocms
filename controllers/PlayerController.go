@@ -103,7 +103,7 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 	}
 	c.SetCookie(h.mediaCookie(c, dbLink.UUID, mediaToken, mediaExpiration))
 
-	// ⚠️ Handle hls/mp4 stream URLs for the player. 
+	// ⚠️ Handle hls/mp4 stream URLs for the player.
 	// If the video has HLS renditions, use the adaptive HLS master playlist URL.
 	// Imported direct-MP4 assets have no HLS renditions, so fall back to their progressive MP4 URL.
 	var hlsStreamURL, mp4StreamURL string
@@ -122,8 +122,9 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 				hlsStreamWidth = strconv.Itoa(int(qualiItem.Width))
 				hlsStreamHeight = strconv.Itoa(int(qualiItem.Height))
 			}
-		case "mp4":
-			mediaURL = fmt.Sprintf("%s/%s/%s/1/stream/video.mp4", h.Config().FolderVideoQualitysPub, dbLink.UUID, qualiItem.Name)
+		case "mp4", "mkv":
+			ext := strings.ToLower(qualiItem.Type)
+			mediaURL = fmt.Sprintf("%s/%s/%s/1/stream/video.%s", h.Config().FolderVideoQualitysPub, dbLink.UUID, qualiItem.Name, ext)
 			if mp4StreamURL == "" {
 				mp4StreamURL = mediaURL
 				mp4StreamWidth = strconv.Itoa(int(qualiItem.Width))
@@ -171,7 +172,7 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 
 					jsonSubtitles = append(jsonSubtitles, map[string]string{
 						"data": base64.StdEncoding.EncodeToString([]byte(subText)),
-						"type": "vtt",
+						"type": strings.ToLower(subItem.Type),
 						"name": subItem.Name,
 						"lang": subItem.Lang,
 					})
@@ -398,7 +399,7 @@ func BuildPlayerStatus(dbLink *models.Link) PlayerStatusResponse {
 	var activeTask bool
 
 	for _, quality := range dbLink.File.Qualitys {
-		if quality.Type != "hls" && quality.Type != "mp4" {
+		if quality.Type != "hls" && quality.Type != "mp4" && quality.Type != "mkv" {
 			continue
 		}
 

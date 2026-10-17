@@ -5,8 +5,8 @@ import (
 	"context"
 	"log"
 	"os"
-	"time"
 	"strings"
+	"time"
 )
 
 func (w *WorkerGroup) EncoderCleanup(ctx context.Context) {
@@ -39,17 +39,16 @@ func (w *WorkerGroup) runEncoderCleanup() {
 	}
 
 	for _, dbReadyFile := range dbReadyFiles {
-		// ⚠️ Safeguard for imported MP4 files from Streamingplay 
-		// Streamingplay videos are imported as MP4 files and are not encoded into other formats.
-		// Skip and do not run original-source cleanup for these files.
-		hasDirectMP4 := false
+		// Direct MP4/MKV qualities are the final media asset, not an encoded
+		// derivative. Never delete their source path through encoder cleanup.
+		hasDirectMedia := false
 		for _, quality := range dbReadyFile.Qualitys {
-			if strings.EqualFold(quality.Type, "mp4") {
-				hasDirectMP4 = true
+			if strings.EqualFold(quality.Type, "mp4") || strings.EqualFold(quality.Type, "mkv") {
+				hasDirectMedia = true
 				break
 			}
 		}
-		if hasDirectMP4 {
+		if hasDirectMedia {
 			continue
 		}
 

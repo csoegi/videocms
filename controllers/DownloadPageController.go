@@ -65,12 +65,18 @@ func (h *Handlers) DownloadPageController(c echo.Context) error {
 	qualities := downloadQualityOptions(dbLink.File.Qualitys)
 	audios := downloadAudioOptions(dbLink.File.Audios)
 
-	//⚠️ Check if video is directly imported mp4, if so, we can allow direct download without ffmpeg processing.
+	// Direct media can be downloaded without building a new container with FFmpeg.
 	hasDirectMP4 := false
+	hasDirectMKV := false
 	for _, quality := range dbLink.File.Qualitys {
-		if quality.Type == "mp4" && quality.Ready {
+		if !quality.Ready {
+			continue
+		}
+		switch strings.ToLower(quality.Type) {
+		case "mp4":
 			hasDirectMP4 = true
-			break
+		case "mkv":
+			hasDirectMKV = true
 		}
 	}
 	subtitles := downloadSubtitleOptions(dbLink.File.Subtitles)
@@ -87,8 +93,9 @@ func (h *Handlers) DownloadPageController(c echo.Context) error {
 		"Audios":       audios,
 		"Subtitles":    subtitles,
 		"CanDownload":  len(qualities) > 0,
-		"CanUseMP4":    hasDirectMP4 || len(audios) > 0,
+		"CanUseMP4":    hasDirectMP4 || hasDirectMKV || len(audios) > 0,
 		"HasDirectMP4": hasDirectMP4,
+		"HasDirectMKV": hasDirectMKV,
 	})
 }
 
@@ -99,7 +106,7 @@ func (h *Handlers) downloadsEnabled() bool {
 func downloadQualityOptions(qualities []models.Quality) []DownloadQualityOption {
 	options := make([]DownloadQualityOption, 0, len(qualities))
 	for _, quality := range qualities {
-		if (quality.Type != "hls" && quality.Type != "mp4") || !quality.Ready {
+		if (quality.Type != "hls" && quality.Type != "mp4" && quality.Type != "mkv") || !quality.Ready {
 			continue
 		}
 		dimensions := quality.Name
