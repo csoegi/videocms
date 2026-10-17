@@ -19,6 +19,8 @@ type WorkerGroup struct {
 	activeEncodings   []ActiveEncoding
 	limitChan         chan bool
 
+	missingQualityRepairMu sync.Mutex
+
 	activeDownloadsMu     sync.Mutex
 	activeDownloadCancels map[uint]context.CancelFunc
 

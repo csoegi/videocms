@@ -276,3 +276,15 @@ func TestDownloadQualityOptionsIncludesReadyDirectMP4(t *testing.T) {
 		t.Fatalf("direct MP4 option = %#v", qualities[0])
 	}
 }
+
+func TestDownloadQualityOptionsIncludesReadyDirectMKV(t *testing.T) {
+	qualities := downloadQualityOptions([]models.Quality{{
+		Name: "1080p", Type: "mkv", Ready: true, Height: 1080, Width: 1920,
+	}})
+	if len(qualities) != 1 {
+		t.Fatalf("downloadQualityOptions() returned %d options, want 1", len(qualities))
+	}
+	if qualities[0].Type != "mkv" || qualities[0].Name != "1080p" {
+		t.Fatalf("direct MKV option = %#v", qualities[0])
+	}
+}

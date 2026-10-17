@@ -37,6 +37,7 @@ func TestWebRoutesUsePreparedDownloadJobsAndRemoveAttachmentRoute(t *testing.T) 
 		http.MethodGet + " /media/:UUID/download-jobs/:JOBUUID",
 		http.MethodGet + " /media/:UUID/download-jobs/:JOBUUID/file",
 		http.MethodGet + " /media/:UUID/:QUALITY/:STREAM/stream/video.mp4",
+		http.MethodGet + " /media/:UUID/:QUALITY/:STREAM/stream/video.mkv",
 	} {
 		if !routes[expected] {
 			t.Fatalf("missing route %q", expected)

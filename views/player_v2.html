@@ -603,9 +603,13 @@
         let movieStarted = false;
 
         function initAds() {
-            // 1. Initial State: load only the source selected by VideoCMS. The media-player
-            // element already has the same URL, so avoid needlessly resetting its source.
-            if (streamUrl && player.src !== streamUrl) player.src = streamUrl;
+            // 1. Initial State: load only the source selected by VideoCMS. Compare
+            // normalized URLs because the component may expose an absolute URL while
+            // the template supplies a relative one; avoid needless source resets.
+            const configuredSrc = player.src || player.getAttribute("src") || "";
+            if (streamUrl && normalizedMediaURL(configuredSrc) !== normalizedMediaURL(streamUrl)) {
+                player.src = streamUrl;
+            }
             player.poster = THUMB;
             
             // 2. If bypass-ads querystring for loggedin CMS user is set, skip all ad logic
@@ -771,48 +775,93 @@
             }, 1000);
         }
 
-        // Replace the old player.src assignment with our new init
-        initAds();
-        
+        // The Vidstack module is deferred. Do not access player.src or the
+        // provider API until the custom element has been upgraded; setting an
+        // expando `src` property before upgrade can race provider initialization.
+        const subtitleObjectURLs = [];
+        let subtitleInjectionTimer = null;
+
+        function normalizedMediaURL(value) {
+            const raw = value && typeof value === "object" ? (value.src || "") : String(value || "");
+            if (!raw) return "";
+            try {
+                return new URL(raw, window.location.href).href;
+            } catch (_) {
+                return raw;
+            }
+        }
+
+        function isMainVideoSource() {
+            const activeSrc = normalizedMediaURL(player.src || player.getAttribute("src") || player.currentSrc || "");
+            if (!activeSrc || !streamUrl) return true;
+            return activeSrc === normalizedMediaURL(streamUrl);
+        }
+
+        function registerSubtitleTracks() {
+            if (!player || !player.provider || !player.textTracks || !isMainVideoSource()) return false;
+            if (!Array.isArray(Subtitles) || Subtitles.length === 0) return true;
+
+            Subtitles.forEach((sub, index) => {
+                if (!sub || sub.type === "ass" || !sub.data) return;
+                const id = `videocms-subtitle-${index}`;
+                const label = `${sub.name || `Subtitle ${index + 1}`} (${String(sub.lang || "und").toUpperCase()})`;
+                const existing = Array.from(player.textTracks).find((track) => track.id === id || (track.label === label && track.kind === "subtitles"));
+                if (existing) return;
+
+                try {
+                    let text = b64DecodeUnicode(sub.data).replace(/^\uFEFF/, "");
+                    if (!/^WEBVTT(?:\s|$)/.test(text)) text = `WEBVTT\n\n${text.replace(/\r\n/g, "\n")}`;
+                    const url = URL.createObjectURL(new Blob([text], { type: "text/vtt;charset=utf-8" }));
+                    subtitleObjectURLs.push(url);
+                    player.textTracks.add({
+                        id,
+                        kind: "subtitles",
+                        label,
+                        src: url,
+                        srclang: sub.lang || "und",
+                        type: "vtt",
+                        default: sub.is_default === "true" || index === 0,
+                    });
+                    console.debug(`[VideoCMS] Registered subtitle track: ${label}`);
+                } catch (error) {
+                    console.error(`[VideoCMS] Failed to register subtitle ${label}:`, error);
+                }
+            });
+            return true;
+        }
+
+        function scheduleSubtitleRegistration() {
+            if (subtitleInjectionTimer) window.clearTimeout(subtitleInjectionTimer);
+            let attempts = 0;
+            const attempt = () => {
+                if (registerSubtitleTracks()) return;
+                attempts += 1;
+                if (attempts < 30) subtitleInjectionTimer = window.setTimeout(attempt, 100);
+            };
+            attempt();
+        }
+
+        customElements.whenDefined("media-player").then(() => {
+            // Attach lifecycle hooks before setting the source so a provider
+            // replacement (for example after an ad) cannot silently drop tracks.
+            player.addEventListener("provider-change", scheduleSubtitleRegistration);
+            player.addEventListener("loaded-metadata", scheduleSubtitleRegistration);
+            player.addEventListener("can-play", scheduleSubtitleRegistration);
+            initAds();
+            scheduleSubtitleRegistration();
+        }).catch((error) => console.error("[VideoCMS] Vidstack initialization failed:", error));
+
+        window.addEventListener("pagehide", () => {
+            subtitleObjectURLs.forEach((url) => URL.revokeObjectURL(url));
+        }, { once: true });
+
         // --- Setup Analytics Tracking for Streaming ---
         player.addEventListener('play', () => {
             fetch(`/api/analytics/stream/${UUID}`, { method: 'POST' });
         }, { once: true });
 
-        // --- 🌟 Setup Subtitles ---
-        const trackInjectorInterval = setInterval(() => {
-            const player = document.querySelector('media-player');
-            
-            if (player && player.textTracks) {
-                clearInterval(trackInjectorInterval); 
-                console.log("[Views->Player_v2] [INFO] Found subtitle tracks. Injecting tracks safely...");
-
-                if (typeof Subtitles !== 'undefined' && Array.isArray(Subtitles)) {
-                    Subtitles.forEach((sub, index) => {
-                        if (sub.type === 'ass') return;
-
-                        try {
-                            const blob = new Blob([b64DecodeUnicode(sub.data)], { type: 'text/vtt' });
-                            const url = URL.createObjectURL(blob);
-                            
-                            player.textTracks.add({
-                                kind: 'subtitles',
-                                label: `${sub.name} (${sub.lang.toUpperCase()})`,
-                                src: url,
-                                srclang: sub.lang,
-                                type: 'vtt',
-                                // Force the first track or default track row to activate natively on screen
-                                default: sub.is_default === 'true' || index === 0
-                            });
-                            
-                            console.log(`[Views->Player_v2] [INFO] Track is successfully loaded: ${sub.name}`);
-                        } catch (err) {
-                            console.error("[Views->Player_v2] [INFO] Failed to inject track:", err);
-                        }
-                    });
-                }
-            }
-        }, 100);
+        // Subtitle tracks are registered after Vidstack initializes its active media provider.
+        // Provider changes re-run registration, which matters when mid-roll ads replace the source.
 
         // --- Webhooks Logic ---
         function activateWebhooks() {

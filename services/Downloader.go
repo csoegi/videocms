@@ -68,6 +68,7 @@ func (w *WorkerGroup) loadDownloadTasks(ctx context.Context) {
 			Where("id = ? AND status = ?", download.ID, models.RemoteDownloadStatusPending).
 			Updates(map[string]interface{}{
 				"status":     models.RemoteDownloadStatusDownloading,
+				"stage":      "Preparing source",
 				"started_at": &now,
 				"error":      "",
 				"progress":   0,
@@ -77,6 +78,7 @@ func (w *WorkerGroup) loadDownloadTasks(ctx context.Context) {
 		}
 
 		download.Status = models.RemoteDownloadStatusDownloading
+		download.Stage = "Preparing source"
 		download.StartedAt = &now
 		downloadCtx, cancel := context.WithCancel(ctx)
 		w.registerActiveDownload(download.ID, cancel)
@@ -139,6 +141,7 @@ func (w *WorkerGroup) processDownload(parentCtx context.Context, task models.Rem
 		w.failDownload(&task, err.Error())
 		return
 	}
+	w.setRemoteDownloadStage(&task, "Fetching source", 0)
 
 	downloadCtx := parentCtx
 	cancelTimeout := func() {}
@@ -166,17 +169,51 @@ func (w *WorkerGroup) processDownload(parentCtx context.Context, task models.Rem
 		return
 	}
 
+	isHLSInput := isHLSPlaylistResponse(task.Url, resp)
+	if isHLSInput {
+		w.setRemoteDownloadStage(&task, "Downloading HLS segments and remuxing to MP4", 0.10)
+	} else {
+		w.setRemoteDownloadStage(&task, "Downloading file", 0)
+	}
+	hlsSourceURL := task.Url
+	if resp.Request != nil && resp.Request.URL != nil {
+		hlsSourceURL = resp.Request.URL.String()
+	}
 	totalSize := int64(0)
 	if resp.ContentLength > 0 {
 		totalSize = resp.ContentLength
 	}
 	cfg = w.Config()
-	if totalSize > 0 && cfg.MaxUploadFilesize > 0 && totalSize > cfg.MaxUploadFilesize {
+	// An HLS playlist's Content-Length describes only the small playlist, not
+	// the final media. Its remux output is size-limited separately.
+	if !isHLSInput && totalSize > 0 && cfg.MaxUploadFilesize > 0 && totalSize > cfg.MaxUploadFilesize {
 		w.failDownload(&task, fmt.Sprintf("Remote file exceeds max upload size (%d bytes)", cfg.MaxUploadFilesize))
 		return
 	}
 
+	var initialPlaylist []byte
+	initialPlaylistContentType := resp.Header.Get("Content-Type")
+	if isHLSInput {
+		// Reuse the playlist body already fetched for type detection. Signed URLs
+		// may be single-use or expire quickly, so asking FFmpeg to fetch the root
+		// playlist again can make an otherwise valid job fail.
+		const maxHLSPlaylistBytes = 4 << 20
+		initialPlaylist, err = io.ReadAll(io.LimitReader(resp.Body, maxHLSPlaylistBytes+1))
+		if err != nil {
+			w.failDownload(&task, fmt.Sprintf("Failed to read HLS playlist: %v", err))
+			return
+		}
+		if len(initialPlaylist) > maxHLSPlaylistBytes {
+			w.failDownload(&task, "HLS playlist exceeds maximum allowed size")
+			return
+		}
+	}
+
 	fileName := resolveRemoteFileName(task, resp)
+	if isHLSInput {
+		fileName = hlsMP4OutputName(fileName, task.ID)
+		totalSize = 0 // Output size is not known until FFmpeg finishes.
+	}
 	tempPath := filepath.Join(cfg.FolderVideoUploadsPriv, fmt.Sprintf("remote_%d_%s.download", task.ID, uuid.NewString()))
 	if err := os.MkdirAll(filepath.Dir(tempPath), 0755); err != nil {
 		w.failDownload(&task, fmt.Sprintf("Failed to prepare upload folder: %v", err))
@@ -186,34 +223,63 @@ func (w *WorkerGroup) processDownload(parentCtx context.Context, task models.Rem
 	task.Name = fileName
 	task.TotalSize = totalSize
 	task.TempPath = tempPath
+	initialProgress := 0.0
+	if isHLSInput {
+		initialProgress = 0.10
+	}
 	if res := w.deps.DB.Model(&task).Updates(map[string]interface{}{
 		"name":       task.Name,
 		"total_size": task.TotalSize,
 		"temp_path":  task.TempPath,
+		"progress":   initialProgress,
 	}); res.Error != nil {
 		w.failDownload(&task, "Failed to persist download metadata")
 		return
 	}
 
-	out, err := os.Create(tempPath)
-	if err != nil {
-		w.failDownload(&task, fmt.Sprintf("Failed to create temp file: %v", err))
-		return
+	var copied int64
+	if isHLSInput {
+		// The first safe HTTP request above verifies URL accessibility and helps
+		// identify playlist responses. FFmpeg fetches the playlist and every
+		// segment through a local proxy that enforces public-IP checks.
+		_ = resp.Body.Close()
+		if err := remuxRemoteHLS(downloadCtx, hlsSourceURL, initialPlaylist, initialPlaylistContentType, tempPath, cfg.MaxUploadFilesize); err != nil {
+			cleanupRemoteTemp(tempPath, fileName)
+			w.failOrCancelDownload(&task, fmt.Sprintf("HLS to MP4 conversion failed: %v", err))
+			return
+		}
+		w.setRemoteDownloadStage(&task, "Validating MP4 output", 0.78)
+		info, err := os.Stat(tempPath)
+		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
+			cleanupRemoteTemp(tempPath, fileName)
+			w.failDownload(&task, "HLS conversion did not produce a valid MP4 file")
+			return
+		}
+		copied = info.Size()
+	} else {
+		out, err := os.Create(tempPath)
+		if err != nil {
+			w.failDownload(&task, fmt.Sprintf("Failed to create temp file: %v", err))
+			return
+		}
+		var copyErr error
+		copied, copyErr = w.copyRemoteBody(downloadCtx, resp.Body, out, &task)
+		closeErr := out.Close()
+		if copyErr != nil {
+			cleanupRemoteTemp(tempPath, fileName)
+			w.failOrCancelDownload(&task, fmt.Sprintf("Download failed: %v", copyErr))
+			return
+		}
+		if closeErr != nil {
+			cleanupRemoteTemp(tempPath, fileName)
+			w.failDownload(&task, fmt.Sprintf("Failed to close temp file: %v", closeErr))
+			return
+		}
 	}
 
-	copied, copyErr := w.copyRemoteBody(downloadCtx, resp.Body, out, &task)
-	closeErr := out.Close()
-	if copyErr != nil {
-		cleanupRemoteTemp(tempPath, fileName)
-		w.failOrCancelDownload(&task, fmt.Sprintf("Download failed: %v", copyErr))
-		return
+	if !isHLSInput {
+		w.setRemoteDownloadStage(&task, "Validating downloaded file", 0.78)
 	}
-	if closeErr != nil {
-		cleanupRemoteTemp(tempPath, fileName)
-		w.failDownload(&task, fmt.Sprintf("Failed to close temp file: %v", closeErr))
-		return
-	}
-
 	task.BytesDownloaded = copied
 	if w.isCancelRequested(task.ID) {
 		cleanupRemoteTemp(tempPath, fileName)
@@ -223,29 +289,38 @@ func (w *WorkerGroup) processDownload(parentCtx context.Context, task models.Rem
 
 	if res := w.deps.DB.Model(&task).Updates(map[string]interface{}{
 		"status":           models.RemoteDownloadStatusImporting,
+		"stage":            "Registering media",
 		"bytes_downloaded": task.BytesDownloaded,
-		"progress":         0.95,
+		"progress":         0.88,
 	}); res.Error != nil {
 		cleanupRemoteTemp(tempPath, fileName)
 		w.failDownload(&task, "Failed to update import status")
 		return
 	}
 	task.Status = models.RemoteDownloadStatusImporting
-	task.Progress = 0.95
+	task.Stage = "Registering media"
+	task.Progress = 0.88
 
 	fileUUID := uuid.NewString()
 
-	status, dbLink, cloned, err := w.logic.CreateFile(
-		&tempPath, 
-		task.ParentFolderID, 
-		task.Name, 
-		fileUUID, 
-		task.BytesDownloaded, 
-		task.UserID, 
-		"",
-		"none",            // 💡 subtitleMode: "none"
-		nil,               // 💡 externalSubs: nil
-	)
+	var status int
+	var dbLink *models.Link
+	var cloned bool
+	encodingEnabled := w.Config().EncodingEnabled != nil && *w.Config().EncodingEnabled
+	directMedia := isHLSInput || !encodingEnabled
+	if isHLSInput {
+		// HLS input is already encoded media. Publish the stream-copy MP4 directly
+		// even when normal MP4 uploads are configured to go through HLS encoding.
+		status, dbLink, cloned, err = w.logic.CreateFileDirect(
+			&tempPath, task.ParentFolderID, task.Name, fileUUID,
+			task.BytesDownloaded, task.UserID, "", "none", nil,
+		)
+	} else {
+		status, dbLink, cloned, err = w.logic.CreateFile(
+			&tempPath, task.ParentFolderID, task.Name, fileUUID,
+			task.BytesDownloaded, task.UserID, "", "none", nil,
+		)
+	}
 
 	if err != nil {
 		cleanupRemoteTemp(tempPath, fileName)
@@ -267,6 +342,22 @@ func (w *WorkerGroup) processDownload(parentCtx context.Context, task models.Rem
 		return
 	}
 
+	// For the direct-media path, the remote-download job stays active until the
+	// publisher confirms the file is ready. Normal encoded downloads finish once
+	// their source has been registered and queued for encoding.
+	if directMedia && !cloned {
+		w.setRemoteDownloadStage(&task, "Publishing media", 0.95)
+		if err := w.waitForDirectMediaPublication(downloadCtx, task.ID, dbLink.FileID); err != nil {
+			if w.isCancelRequested(task.ID) || errors.Is(err, context.Canceled) {
+				_ = w.deleteImportedRemoteLink(task.UserID, dbLink.ID)
+				w.finishCanceled(&task, "Download canceled")
+				return
+			}
+			w.failDownload(&task, fmt.Sprintf("Media publication failed: %v", err))
+			return
+		}
+	}
+
 	if cloned {
 		cleanupRemoteTemp(tempPath, fileName)
 	}
@@ -278,6 +369,7 @@ func (w *WorkerGroup) processDownload(parentCtx context.Context, task models.Rem
 	}
 
 	task.Status = models.RemoteDownloadStatusCompleted
+	task.Stage = "Completed"
 	task.FinishedAt = &finishTime
 	task.Progress = 1.0
 	task.Duration = duration
@@ -289,6 +381,81 @@ func (w *WorkerGroup) processDownload(parentCtx context.Context, task models.Rem
 	w.deps.DB.Save(&task)
 
 	w.logStats(task)
+}
+
+// setRemoteDownloadStage persists a human-readable phase independently from
+// byte-based progress. For HLS jobs, percentages are milestones because FFmpeg
+// downloads and remuxes segments concurrently and does not know the final byte
+// size in advance.
+func (w *WorkerGroup) setRemoteDownloadStage(task *models.RemoteDownload, stage string, progress float64) {
+	if task == nil {
+		return
+	}
+	task.Stage = stage
+	task.Progress = progress
+	if err := w.deps.DB.Model(&models.RemoteDownload{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+		"stage":    stage,
+		"progress": progress,
+	}).Error; err != nil {
+		log.Printf("[Services->Downloader] Failed to persist stage %q for remote download %d: %v", stage, task.ID, err)
+	}
+}
+
+// waitForDirectMediaPublication waits for the direct-media quality to transition
+// to Ready. This keeps HLS/direct-MP4 downloads from appearing completed while
+// their staging directory is still waiting for the publisher.
+func (w *WorkerGroup) waitForDirectMediaPublication(ctx context.Context, downloadID uint, fileID uint) error {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		if w.isCancelRequested(downloadID) {
+			return context.Canceled
+		}
+		var qualities []models.Quality
+		if err := w.deps.DB.Where("file_id = ? AND type IN ?", fileID, []string{"mp4", "mkv"}).Find(&qualities).Error; err != nil {
+			return fmt.Errorf("query direct media quality: %w", err)
+		}
+		if len(qualities) > 0 {
+			for _, quality := range qualities {
+				if quality.Ready {
+					return nil
+				}
+				if quality.Failed {
+					if quality.Error != "" {
+						return errors.New(quality.Error)
+					}
+					return errors.New("publisher marked the direct quality as failed")
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func isHLSPlaylistResponse(rawURL string, resp *http.Response) bool {
+	if parsed, err := url.Parse(rawURL); err == nil && strings.EqualFold(filepath.Ext(parsed.Path), ".m3u8") {
+		return true
+	}
+	if resp == nil {
+		return false
+	}
+	if resp.Request != nil && resp.Request.URL != nil && strings.EqualFold(filepath.Ext(resp.Request.URL.Path), ".m3u8") {
+		return true
+	}
+	contentType := strings.ToLower(strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0]))
+	return strings.Contains(contentType, "mpegurl") || strings.Contains(contentType, "m3u8")
+}
+
+func hlsMP4OutputName(inputName string, downloadID uint) string {
+	base := strings.TrimSpace(strings.TrimSuffix(filepath.Base(inputName), filepath.Ext(inputName)))
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		base = fmt.Sprintf("remote-download-%d", downloadID)
+	}
+	return sanitizeRemoteFileName(base+".mp4", downloadID)
 }
 
 func secureHTTPClient() *http.Client {
@@ -479,6 +646,7 @@ func (w *WorkerGroup) failOrCancelDownload(task *models.RemoteDownload, reason s
 func (w *WorkerGroup) failDownload(task *models.RemoteDownload, reason string) {
 	now := time.Now()
 	task.Status = models.RemoteDownloadStatusFailed
+	task.Stage = "Failed"
 	task.Error = truncateRemoteError(reason)
 	task.FinishedAt = &now
 	if task.StartedAt != nil {
@@ -491,6 +659,7 @@ func (w *WorkerGroup) failDownload(task *models.RemoteDownload, reason string) {
 func (w *WorkerGroup) finishCanceled(task *models.RemoteDownload, reason string) {
 	now := time.Now()
 	task.Status = models.RemoteDownloadStatusCanceled
+	task.Stage = "Canceled"
 	task.Error = truncateRemoteError(reason)
 	task.FinishedAt = &now
 	task.CanceledAt = &now
@@ -552,6 +721,7 @@ func (w *WorkerGroup) CancelRemoteDownload(userID uint, downloadID uint) (int, e
 	switch task.Status {
 	case models.RemoteDownloadStatusPending:
 		task.Status = models.RemoteDownloadStatusCanceled
+		task.Stage = "Canceled"
 		task.Error = "Download canceled"
 		task.CancelRequestedAt = &now
 		task.CanceledAt = &now
@@ -579,6 +749,7 @@ func (w *WorkerGroup) CancelRemoteDownload(userID uint, downloadID uint) (int, e
 
 		cleanupRemoteTemp(task.TempPath, task.Name)
 		task.Status = models.RemoteDownloadStatusCanceled
+		task.Stage = "Canceled"
 		task.Error = "Download canceled"
 		task.CanceledAt = &now
 		task.FinishedAt = &now
@@ -657,10 +828,12 @@ func (w *WorkerGroup) resetStaleRemoteDownloads() {
 		cleanupRemoteTemp(task.TempPath, task.Name)
 		if task.Status == models.RemoteDownloadStatusCanceling {
 			task.Status = models.RemoteDownloadStatusCanceled
+			task.Stage = "Canceled"
 			task.Error = "Download canceled during server restart"
 			task.CanceledAt = &now
 		} else {
 			task.Status = models.RemoteDownloadStatusFailed
+			task.Stage = "Failed"
 			task.Error = "Download interrupted by server restart"
 		}
 		task.FinishedAt = &now
