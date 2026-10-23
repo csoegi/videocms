@@ -16,4 +16,4 @@ services:
     expose:
       - '3000'
     labels:
-      caddy_0.request_body.max_size: 5G
+      caddy_0.request_body.max_size: 20G
