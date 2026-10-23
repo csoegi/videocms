@@ -809,33 +809,41 @@ func (w *WorkerGroup) runEncodeSub(ctx context.Context, encodingTask models.Subt
 	w.deps.DB.Save(&encodingTask)
 }
 
+// Reserve approximately one-third of the CPUs visible to the process.
+// Illustration of Intel Xeon Gold 6248 with 20 cores 40 logical threads
+// MaxRunningEncodes	Threads per job		Reserved logical CPUs
+// 1					27					13
+// 2					13					13
+// 3					8					13
+// 4					6					13
 func (w *WorkerGroup) calculateThreadsPerJob() int {
-	totalCores := runtime.NumCPU()
+    totalCores := runtime.NumCPU()
 
-	// 1. Keep 25% of the machine's capacity free for Web/Player traffic, capped at 2 cores max
-	freeCoresForWeb := totalCores / 4
-	if freeCoresForWeb > 2 {
-		freeCoresForWeb = 2
-	}
-	// Safeguard: Ensure we leave at least 1 core for the OS/Go if totalCores > 1
-	if freeCoresForWeb < 1 && totalCores > 1 {
-		freeCoresForWeb = 1
-	}
+    if totalCores < 1 {
+        return 1
+    }
 
-	// 2. Divide remaining cores among allowed concurrent encoding queues
-	maxJobs := int(w.Config().MaxRunningEncodes)
-	if maxJobs < 1 {
-		maxJobs = 1
-	}
+    // Reserve roughly one-third of visible logical CPUs
+    // for WordPress, MariaDB, player/API traffic, and the OS.
+    reservedCores := totalCores / 3
 
-	threadsPerJob := (totalCores - freeCoresForWeb) / maxJobs
+    if reservedCores < 1 && totalCores > 1 {
+        reservedCores = 1
+    }
 
-	// 3. Absolute safety fallback: An FFmpeg job must use at least 1 thread
-	if threadsPerJob < 1 {
-		threadsPerJob = 1
-	}
+    maxJobs := int(w.Config().MaxRunningEncodes)
+    if maxJobs < 1 {
+        maxJobs = 1
+    }
 
-	return threadsPerJob
+    availableCores := totalCores - reservedCores
+    threadsPerJob := availableCores / maxJobs
+
+    if threadsPerJob < 1 {
+        threadsPerJob = 1
+    }
+
+    return threadsPerJob
 }
 
 func (w *WorkerGroup) tempSock(totalDuration float64, sockFileName string, encodingTask IwithProcess) string {
