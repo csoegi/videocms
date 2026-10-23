@@ -566,16 +566,21 @@ func (h *Handlers) mediaCookie(c echo.Context, linkUUID string, token string, ex
 		sameSite = http.SameSiteNoneMode
 	}
 
+	// ⚠️ Set vc_media as a partitioned cookie to fix CORS issue
+	// Issue: when player is loaded inside iframe, vc_media cookie is loaded to parent site and not being sent to the player
+	// Solution: use CHIPS (partitioned cookies), set Paritioned flag to true, 
+	// which lets a cookie be stored separately for each top-level site embedding the player.
 	return &http.Cookie{
-		Name:     auth.MediaCookieName,
-		Value:    token,
-		Path:     h.mediaCookiePath(linkUUID),
-		Expires:  expiration,
-		MaxAge:   int(auth.MediaTokenDuration.Seconds()),
-		HttpOnly: true,
-		Secure:   secure,
-		SameSite: sameSite,
-	}
+        Name:        auth.MediaCookieName,
+        Value:       token,
+        Path:        h.mediaCookiePath(linkUUID),
+        Expires:     expiration,
+        MaxAge:      int(auth.MediaTokenDuration.Seconds()),
+        HttpOnly:    true,
+        Secure:      secure,
+        SameSite:    sameSite,
+        Partitioned: secure,
+    }
 }
 
 func (h *Handlers) mediaCookiePath(linkUUID string) string {
