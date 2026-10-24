@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -117,7 +118,7 @@ func (h *Handlers) DownloadVideoController(c echo.Context) error {
 			c.Response().Header().Set("Accept-Ranges", "bytes")
 			h.Logic.TrackTraffic(dbLink.File.UserID, dbLink.FileID, quality.ID, 0, uint64(info.Size()))
 			h.Logic.RecordEvent("download", requestValidation.UUID, c.RealIP(), c.Request().UserAgent())
-			http.ServeContent(c.Response(), c.Request(), fileName, info.ModTime(), file)
+			serveVideoContent(c, targetContainer, fileName, info.ModTime(), file)
 			return nil
 		}
 
@@ -207,6 +208,101 @@ func (h *Handlers) DownloadVideoController(c echo.Context) error {
 	c.Response().Header().Set("Accept-Ranges", "bytes")
 	http.ServeContent(c.Response(), c.Request(), fileName, time.Now(), tmpFile)
 	return nil
+}
+
+// serveVideoContent optionally caps a single byte-range response for direct MP4
+// playback. This only changes the HTTP Range header; it never modifies the MP4
+// file on disk. The cap is disabled unless both environment variables are set:
+//
+//	MP4_RANGE_CAP_BYTES=4194304
+//	MP4_RANGE_CAP_LINK_UUIDS=link-uuid-1,link-uuid-2
+//
+// Use MP4_RANGE_CAP_LINK_UUIDS=* to enable it for all direct MP4 links. Explicit
+// downloads (?download=1), MKV responses, converted responses, and other links
+// are not affected unless they match the configured direct MP4 path.
+func serveVideoContent(c echo.Context, targetContainer, fileName string, modTime time.Time, file *os.File) {
+	request := c.Request()
+	if targetContainer == "mp4" && c.QueryParam("download") != "1" {
+		if maxBytes, enabled := configuredMP4RangeCap(c.Param("UUID")); enabled {
+			request = capSingleByteRangeRequest(request, maxBytes)
+		}
+	}
+	http.ServeContent(c.Response(), request, fileName, modTime, file)
+}
+
+func configuredMP4RangeCap(linkUUID string) (int64, bool) {
+	maxBytes, err := strconv.ParseInt(strings.TrimSpace(os.Getenv("MP4_RANGE_CAP_BYTES")), 10, 64)
+	if err != nil || maxBytes <= 0 {
+		return 0, false
+	}
+	allowedLinks := strings.TrimSpace(os.Getenv("MP4_RANGE_CAP_LINK_UUIDS"))
+	if allowedLinks == "" || strings.TrimSpace(linkUUID) == "" {
+		return 0, false
+	}
+	for _, allowed := range strings.Split(allowedLinks, ",") {
+		allowed = strings.TrimSpace(allowed)
+		if allowed == "*" || strings.EqualFold(allowed, linkUUID) {
+			return maxBytes, true
+		}
+	}
+	return 0, false
+}
+
+// capSingleByteRangeRequest limits an open-ended, oversized, or oversized
+// suffix single-byte range to maxBytes. ServeContent then calculates the proper
+// 206 status and Content-Range/Content-Length headers for the capped request.
+// Invalid and multipart ranges are left to net/http's standard handling.
+func capSingleByteRangeRequest(r *http.Request, maxBytes int64) *http.Request {
+	if r == nil || maxBytes <= 0 {
+		return r
+	}
+	rangeValue := strings.TrimSpace(r.Header.Get("Range"))
+	unit, spec, ok := strings.Cut(rangeValue, "=")
+	if !ok || !strings.EqualFold(strings.TrimSpace(unit), "bytes") || strings.Contains(spec, ",") {
+		return r
+	}
+	startText, endText, ok := strings.Cut(strings.TrimSpace(spec), "-")
+	if !ok {
+		return r
+	}
+	startText = strings.TrimSpace(startText)
+	endText = strings.TrimSpace(endText)
+	newRange := ""
+
+	if startText == "" {
+		// A suffix range addresses bytes at the end of the file. Preserve small
+		// suffix requests (e.g. a player probing the MP4 tail).
+		suffixBytes, err := strconv.ParseInt(endText, 10, 64)
+		if err != nil || suffixBytes <= maxBytes || suffixBytes <= 0 {
+			return r
+		}
+		newRange = "bytes=-" + strconv.FormatInt(maxBytes, 10)
+	} else {
+		start, err := strconv.ParseInt(startText, 10, 64)
+		if err != nil || start < 0 {
+			return r
+		}
+		maxInt64 := int64(^uint64(0) >> 1)
+		end := maxInt64
+		if maxBytes-1 <= maxInt64-start {
+			end = start + maxBytes - 1
+		}
+		if endText != "" {
+			requestedEnd, err := strconv.ParseInt(endText, 10, 64)
+			if err != nil || requestedEnd < start {
+				return r
+			}
+			if requestedEnd-start < maxBytes {
+				return r
+			}
+		}
+		newRange = "bytes=" + strconv.FormatInt(start, 10) + "-" + strconv.FormatInt(end, 10)
+	}
+
+	clone := r.Clone(r.Context())
+	clone.Header = r.Header.Clone()
+	clone.Header.Set("Range", newRange)
+	return clone
 }
 
 func resolveDownloadSelection(
