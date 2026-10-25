@@ -4,7 +4,8 @@ import (
 	"ch/kirari04/videocms/controllers"
 	"ch/kirari04/videocms/middlewares"
 	"time"
-
+	"net/http"
+	
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"golang.org/x/time/rate"
@@ -12,6 +13,12 @@ import (
 
 func Web(app *echo.Echo, handlers *controllers.Handlers, middlewareFactory *middlewares.Factory) {
 	cfg := handlers.Config()
+	// Keep the public root focused on authentication instead of exposing the
+	// frontend landing page and its documentation/source links.
+	app.GET("/", func(c echo.Context) error {
+		return c.Redirect(http.StatusFound, "/login")
+	})
+	
 	app.Static("/", "public/")
 
 	app.GET("/captcha/challenge", handlers.GetCaptchaChallenge)
