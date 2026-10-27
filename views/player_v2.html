@@ -926,17 +926,42 @@
             if (!layout || Qualitys.length === 0) return;
 
             layout.download = {
-                url: DOWNLOAD_PAGE_URL,
-                filename: 'download-options'
+                url: DOWNLOAD_PAGE_URL
             };
 
             const prepareDownloadLink = () => {
                 const link = document.querySelector('.vds-download-button');
                 if (!link) return false;
-                link.href = DOWNLOAD_PAGE_URL;
+
                 link.removeAttribute('download');
+                link.href = DOWNLOAD_PAGE_URL;
                 link.target = '_blank';
-                link.rel = 'noopener';
+                link.rel = 'noopener noreferrer';
+                link.style.pointerEvents = 'auto';
+
+                // Avoid duplicate handlers without changing rendering.
+                if (link._downloadRedirectController) {
+                    link._downloadRedirectController.abort();
+                }
+
+                const controller = new AbortController();
+                link._downloadRedirectController = controller;
+
+                link.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.stopImmediatePropagation();
+
+                    window.open(
+                        DOWNLOAD_PAGE_URL,
+                        '_blank',
+                        'noopener,noreferrer'
+                    );
+                }, {
+                    capture: true,
+                    signal: controller.signal
+                });
+
                 return true;
             };
 
@@ -947,7 +972,7 @@
                 observer.observe(layout, { childList: true, subtree: true });
             }
         }
-
+        
         // --- Position Tracking & Continue Watching ---
         const STORAGE_KEY = `POSITION-${UUID}`;
 
