@@ -921,10 +921,10 @@
         // --- Download Logic ---
         function setupDownloads() {
             if (!DOWNLOAD_ENABLED) return;
-
             const layout = document.querySelector('media-video-layout');
             if (!layout || Qualitys.length === 0) return;
 
+            // Keep this so Vidstack renders the button
             layout.download = {
                 url: DOWNLOAD_PAGE_URL
             };
@@ -932,42 +932,34 @@
             const prepareDownloadLink = () => {
                 const link = document.querySelector('.vds-download-button');
                 if (!link) return false;
-
+                
+                // 1. Wipe out the download trigger attribute completely
                 link.removeAttribute('download');
                 link.href = DOWNLOAD_PAGE_URL;
                 link.target = '_blank';
                 link.rel = 'noopener noreferrer';
                 link.style.pointerEvents = 'auto';
 
-                // Avoid duplicate handlers without changing rendering.
-                if (link._downloadRedirectController) {
-                    link._downloadRedirectController.abort();
-                }
+                // 2. Kill the event at the CAPTURE phase (true) before Vidstack's code runs
+                const forceRedirect = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation(); // Blocks Vidstack's internal listeners from execution
+                    
+                    // Perform the redirect to your options page manually
+                    window.open(DOWNLOAD_PAGE_URL, '_blank', 'noopener,noreferrer');
+                };
 
-                const controller = new AbortController();
-                link._downloadRedirectController = controller;
-
-                link.addEventListener('click', (event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    event.stopImmediatePropagation();
-
-                    window.open(
-                        DOWNLOAD_PAGE_URL,
-                        '_blank',
-                        'noopener,noreferrer'
-                    );
-                }, {
-                    capture: true,
-                    signal: controller.signal
-                });
-
+                // Use true as the third argument to catch the tap/click immediately
+                link.addEventListener('click', forceRedirect, true);
+                link.addEventListener('touchend', forceRedirect, true);
+                
                 return true;
             };
 
             if (!prepareDownloadLink()) {
                 const observer = new MutationObserver(() => {
-                    if (prepareDownloadLink()) observer.disconnect();
+                if (prepareDownloadLink()) observer.disconnect();
                 });
                 observer.observe(layout, { childList: true, subtree: true });
             }
