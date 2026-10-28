@@ -74,7 +74,7 @@ func (w *WorkerGroup) claimLegacyQuality() (models.Quality, models.File, string,
 	err := w.deps.DB.Transaction(func(tx *gorm.DB) error {
 		var candidates []models.Quality
 		if err := tx.Preload("File").Joins("JOIN files ON files.id = qualities.file_id").
-			Where("qualities.type = ? AND qualities.ready = ? AND qualities.failed = ? AND qualities.encoding = ? AND qualities.publishing = ?", "mp4", true, false, false, false).
+			Where("qualities.type IN ? AND qualities.ready = ? AND qualities.failed = ? AND qualities.encoding = ? AND qualities.publishing = ?", []string{"mp4", "mkv"}, true, false, false, false).
 			Order("files.created_at DESC, qualities.id DESC").Limit(200).Find(&candidates).Error; err != nil { return err }
 		for _, q := range candidates {
 			if q.File.ID == 0 { continue }
@@ -86,7 +86,7 @@ func (w *WorkerGroup) claimLegacyQuality() (models.Quality, models.File, string,
 			var failures int64
 			if err := tx.Model(&models.ConverterLog{}).Where("quality_id = ? AND cycle_key = ? AND status = ?", q.ID, key, "failed").Count(&failures).Error; err != nil { return err }
 			if failures >= 2 { continue }
-			result := tx.Model(&models.Quality{}).Where("id = ? AND type = ? AND ready = ? AND failed = ? AND encoding = ? AND publishing = ?", q.ID, "mp4", true, false, false, false).Update("encoding", true)
+			result := tx.Model(&models.Quality{}).Where("id = ? AND type IN ? AND ready = ? AND failed = ? AND encoding = ? AND publishing = ?", q.ID, []string{"mp4", "mkv"}, true, false, false, false).Update("encoding", true)
 			if result.Error != nil { return result.Error }
 			if result.RowsAffected == 0 { continue }
 			chosen, chosenFile, input, cycle = q, q.File, path, key
@@ -141,7 +141,7 @@ func (w *WorkerGroup) convertOne(ctx context.Context, q models.Quality, file mod
 		if lastErr == nil { status = "success" }
 		w.deps.DB.Model(&row).Updates(map[string]interface{}{"status":status,"error":errText(lastErr),"playlist_valid":playlistOK,"segments_valid":segmentsOK,"finished_at":finished,"duration_ms":finished.Sub(attemptStart).Milliseconds()})
 		if lastErr == nil {
-			if err := w.deps.DB.Model(&models.Quality{}).Where("id = ? AND type = ? AND encoding = ?", q.ID, "mp4", true).
+			if err := w.deps.DB.Model(&models.Quality{}).Where("id = ? AND type IN ? AND encoding = ?", q.ID, []string{"mp4", "mkv"}, true).
 				Updates(map[string]interface{}{"type":"hls","output_file":"master.m3u8","path":converterStoredPath(w.Config().PublishedQualitysRoot(), outDir),"encoding":false,"progress":100,"ready":true,"failed":false,"error":""}).Error; err != nil {
 				lastErr = err
 				w.deps.DB.Model(&row).Updates(map[string]interface{}{"status":"failed","error":errText(err)})
