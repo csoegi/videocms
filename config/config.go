@@ -71,6 +71,9 @@ type Config struct {
 
 	MaxItemsMultiDelete int64
 	MaxRunningEncodes   int64
+	HLSConverterIntervalMins int64
+	HLSConverterBatchSize int64
+	HLSConverterDeleteOrginal bool
 	MaxFramerate        int64
 
 	MaxUploadFilesize  int64

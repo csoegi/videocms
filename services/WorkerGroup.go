@@ -73,6 +73,7 @@ func (w *WorkerGroup) Start(ctx context.Context) {
 	go w.DownloadPreparer(ctx)
 	go w.DownloadPreparationCleanup(ctx)
 	go w.EncoderCleanup(ctx)
+	go w.HLSConverter(ctx)
 	go w.Publisher(ctx)
 	go w.Deleter(ctx)
 	go w.AuditCleanup(ctx)
