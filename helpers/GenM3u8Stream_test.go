@@ -22,3 +22,32 @@ func TestGenM3u8StreamDoesNotEmitQueryJWT(t *testing.T) {
 		t.Fatalf("playlist missing tokenless audio URL: %s", playlist)
 	}
 }
+
+func TestGenM3u8StreamMultiUsesMediaPlaylistForConverterOutput(t *testing.T) {
+	link := models.Link{UUID: "link-uuid"}
+	qualities := []models.Quality{{
+		Name: "720p", Width: 1280, Height: 720, Type: "hls", Ready: true,
+		OutputFile: "master.m3u8",
+	}}
+
+	playlist := GenM3u8StreamMulti("/videos/qualitys", &link, &qualities, nil)
+	if !strings.Contains(playlist, "/videos/qualitys/link-uuid/720p/video.m3u8") {
+		t.Fatalf("top-level master should reference the media playlist: %s", playlist)
+	}
+	if strings.Contains(playlist, "/videos/qualitys/link-uuid/720p/master.m3u8") {
+		t.Fatalf("top-level master should not reference the per-quality master: %s", playlist)
+	}
+}
+
+func TestGenM3u8StreamMultiPreservesLegacyOutputPlaylist(t *testing.T) {
+	link := models.Link{UUID: "link-uuid"}
+	qualities := []models.Quality{{
+		Name: "720p", Width: 1280, Height: 720, Type: "hls", Ready: true,
+		OutputFile: "out.m3u8",
+	}}
+
+	playlist := GenM3u8StreamMulti("/videos/qualitys", &link, &qualities, nil)
+	if !strings.Contains(playlist, "/videos/qualitys/link-uuid/720p/out.m3u8") {
+		t.Fatalf("legacy output playlist should remain unchanged: %s", playlist)
+	}
+}
