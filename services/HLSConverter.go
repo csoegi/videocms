@@ -42,7 +42,7 @@ func (w *WorkerGroup) HLSConverter(ctx context.Context) {
 func (w *WorkerGroup) normalEncodingQueueIdle() bool {
 	for _, model := range []interface{}{&models.Quality{}, &models.Audio{}, &models.Subtitle{}} {
 		var count int64
-		if err := w.deps.DB.Model(model).Where("encoding = ? OR (ready = ? AND publishing = ?)", true, false, false).Count(&count).Error; err != nil {
+		if err := w.deps.DB.Model(model).Where("encoding = ? OR (ready = ? AND publishing = ? AND failed = ?)", true, false, false, false).Count(&count).Error; err != nil {
 			log.Printf("[HLSConverter] Queue check failed; deferring: %v", err)
 			return false
 		}
@@ -73,9 +73,9 @@ func (w *WorkerGroup) claimLegacyQuality() (models.Quality, models.File, string,
 	root := w.Config().PublishedQualitysRoot()
 	err := w.deps.DB.Transaction(func(tx *gorm.DB) error {
 		var candidates []models.Quality
-		if err := tx.Preload("File").Joins("JOIN files ON files.id = qualitys.file_id").
-			Where("qualitys.type = ? AND qualitys.ready = ? AND qualitys.failed = ? AND qualitys.encoding = ? AND qualitys.publishing = ?", "mp4", true, false, false, false).
-			Order("files.created_at DESC, qualitys.id DESC").Limit(200).Find(&candidates).Error; err != nil { return err }
+		if err := tx.Preload("File").Joins("JOIN files ON files.id = qualities.file_id").
+			Where("qualities.type = ? AND qualities.ready = ? AND qualities.failed = ? AND qualities.encoding = ? AND qualities.publishing = ?", "mp4", true, false, false, false).
+			Order("files.created_at DESC, qualities.id DESC").Limit(200).Find(&candidates).Error; err != nil { return err }
 		for _, q := range candidates {
 			if q.File.ID == 0 { continue }
 			path := resolveConverterInput(root, q.File, q)
@@ -142,11 +142,7 @@ func (w *WorkerGroup) convertOne(ctx context.Context, q models.Quality, file mod
 		w.deps.DB.Model(&row).Updates(map[string]interface{}{"status":status,"error":errText(lastErr),"playlist_valid":playlistOK,"segments_valid":segmentsOK,"finished_at":finished,"duration_ms":finished.Sub(attemptStart).Milliseconds()})
 		if lastErr == nil {
 			if err := w.deps.DB.Model(&models.Quality{}).Where("id = ? AND type = ? AND encoding = ?", q.ID, "mp4", true).
-				Updates(map[string]interface{}{"type":"hls","output_file":"master.m3u8","path":filepath.Join(filepath.Base(outDir),"master.m3u8"),"encoding":false,"progress":100,"ready":true,"failed":false,"error":""}).Error; err != nil { lastErr = err } else {
-				// Originals are removed only in cleanup-only mode, and only after promotion.
-				if w.Config().HLSConverterDeleteOrginal {
-					if err := os.Remove(input); err != nil { log.Printf("[HLSConverter] Original cleanup deferred for %s: %v", input, err) }
-				}
+				Updates(map[string]interface{}{"type":"hls","output_file":"master.m3u8","path":converterStoredPath(w.Config().PublishedQualitysRoot(), outDir),"encoding":false,"progress":100,"ready":true,"failed":false,"error":""}).Error; err != nil { lastErr = err } else {
 				return nil
 			}
 		}
@@ -157,21 +153,29 @@ func (w *WorkerGroup) convertOne(ctx context.Context, q models.Quality, file mod
 }
 
 func packageHLS(ctx context.Context, input, outDir string) error {
-	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries", "stream=codec_type,codec_name", "-of", "csv=p=0", input)
+	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries", "stream=codec_type,codec_name", "-of", "default=noprint_wrappers=1", input)
 	output, err := probe.Output()
 	if err != nil { return fmt.Errorf("ffprobe failed: %w", err) }
 	hasVideo := false
+	codecName := ""
+	codecType := ""
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		parts := strings.Split(strings.TrimSpace(line), ",")
-		if len(parts) < 2 { continue }
-		codec, kind := strings.ToLower(parts[0]), strings.ToLower(parts[1])
-		if kind == "video" {
-			if codec != "h264" { return fmt.Errorf("unsupported video codec %q; stream copy only", codec) }
-			hasVideo = true
+		parts := strings.SplitN(strings.TrimSpace(line), "=", 2)
+		if len(parts) != 2 { continue }
+		switch parts[0] {
+		case "codec_name": codecName = strings.ToLower(parts[1])
+		case "codec_type":
+			codecType = strings.ToLower(parts[1])
+			if codecType == "video" {
+				if codecName != "" && codecName != "h264" { return fmt.Errorf("unsupported video codec %q; stream copy only", codecName) }
+				hasVideo = true
+			}
+			if codecType == "audio" && codecName != "" && codecName != "aac" && codecName != "mp3" && codecName != "ac3" {
+				return fmt.Errorf("unsupported audio codec %q; stream copy only", codecName)
+			}
 		}
-		if kind == "audio" && codec != "aac" && codec != "mp3" && codec != "ac3" {
-			return fmt.Errorf("unsupported audio codec %q; stream copy only", codec)
-		}
+		if codecType == "video" && codecName != "" && codecName != "h264" { return fmt.Errorf("unsupported video codec %q; stream copy only", codecName) }
+		if codecType == "audio" && codecName != "" && codecName != "aac" && codecName != "mp3" && codecName != "ac3" { return fmt.Errorf("unsupported audio codec %q; stream copy only", codecName) }
 	}
 	if !hasVideo { return fmt.Errorf("no H.264 video stream found") }
 	media := filepath.Join(outDir, "video.m3u8")
@@ -217,31 +221,35 @@ func (w *WorkerGroup) logConverterFailure(q models.Quality, file models.File, in
 
 func (w *WorkerGroup) cleanupConvertedOriginals(ctx context.Context, limit int) {
 	if limit < 1 { limit = 2 }
-	var qualities []models.Quality
-	if err := w.deps.DB.Preload("File").Where("type = ? AND ready = ? AND failed = ?", "hls", true, false).Order("updated_at DESC").Limit(limit).Find(&qualities).Error; err != nil {
-		log.Printf("[HLSConverter] Cleanup query failed: %v", err); return
+	var logs []models.ConverterLog
+	if err := w.deps.DB.Where("status = ? AND input_path <> ''", "success").Order("created_at DESC").Limit(limit * 4).Find(&logs).Error; err != nil {
+		log.Printf("[HLSConverter] Cleanup log query failed: %v", err)
+		return
 	}
-	root := w.Config().PublishedQualitysRoot()
-	for _, q := range qualities {
-		if ctx.Err() != nil { return }
-		// Source paths are inferred only from known legacy layouts; validate HLS before removal.
-		candidates := []string{}
-		if filepath.IsAbs(q.Path) { candidates = append(candidates, q.Path) }
-		candidates = append(candidates, filepath.Join(root, q.File.UUID, filepath.Base(q.Path)), filepath.Join(root, q.File.UUID, q.Name, "video.mp4"), filepath.Join(root, q.File.UUID, q.Name, "original.mp4"))
-		for _, original := range candidates {
-			ext := strings.ToLower(filepath.Ext(original))
-			if ext == ".m3u8" || ext == ".ts" || ext == "" { continue }
-			if _, err := os.Stat(original); err != nil { continue }
-			dir := filepath.Dir(original)
-			master, err := os.ReadFile(filepath.Join(dir, "master.m3u8"))
-			if err != nil || !strings.Contains(string(master), "video.m3u8") { continue }
-			if ok, _, err := validateHLS(dir); err != nil || !ok { continue }
-			if err := os.Remove(original); err != nil { log.Printf("[HLSConverter] Cleanup failed for %s: %v", original, err); continue }
-			now := time.Now()
-			w.deps.DB.Create(&models.ConverterLog{FileID:q.FileID,QualityID:q.ID,InputPath:original,OutputPath:dir,Status:"cleanup_success",StartedAt:now,FinishedAt:&now})
-			break
+	removed := 0
+	for _, row := range logs {
+		if ctx.Err() != nil || removed >= limit { return }
+		if _, err := os.Stat(row.InputPath); err != nil { continue }
+		if row.OutputPath == "" { continue }
+		if ok, _, err := validateHLS(row.OutputPath); err != nil || !ok { continue }
+		master, err := os.ReadFile(filepath.Join(row.OutputPath, "master.m3u8"))
+		if err != nil || !strings.Contains(string(master), "video.m3u8") { continue }
+		if err := os.Remove(row.InputPath); err != nil {
+			log.Printf("[HLSConverter] Cleanup failed for %s: %v", row.InputPath, err)
+			continue
 		}
+		now := time.Now()
+		if err := w.deps.DB.Create(&models.ConverterLog{FileID:row.FileID, QualityID:row.QualityID, InputPath:row.InputPath, OutputPath:row.OutputPath, CycleKey:row.CycleKey, Status:"cleanup_success", StartedAt:now, FinishedAt:&now}).Error; err != nil {
+			log.Printf("[HLSConverter] Original deleted but cleanup audit log failed for %s: %v", row.InputPath, err)
+		}
+		removed++
 	}
+}
+
+func converterStoredPath(root, outDir string) string {
+	rel, err := filepath.Rel(root, filepath.Join(outDir, "master.m3u8"))
+	if err != nil { return filepath.Join(filepath.Base(outDir), "master.m3u8") }
+	return rel
 }
 
 func errText(err error) string { if err == nil { return "" }; return err.Error() }
