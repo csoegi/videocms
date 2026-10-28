@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -28,6 +29,7 @@ type LinkListItem struct {
 	// PublicationStatus is the file-level publication state used by the
 	// library UI. Values are: ready, processing, failed, or unknown.
 	PublicationStatus string
+	VideoTypes        []string
 }
 
 func (s *Service) buildLinkListItems(links []models.Link) *[]LinkListItem {
@@ -35,10 +37,20 @@ func (s *Service) buildLinkListItems(links []models.Link) *[]LinkListItem {
 	items := make([]LinkListItem, 0, len(links))
 	for _, link := range links {
 		processing := false
+		videoTypes := make([]string, 0, len(link.File.Qualitys))
+		seenTypes := make(map[string]struct{}, len(link.File.Qualitys))
 		for _, quality := range link.File.Qualitys {
-			if !quality.Ready && !quality.Failed {
+			// Converter claims keep Ready=true while Encoding=true; treat either
+			// state as processing so the library reflects the active conversion.
+			if quality.Encoding || (!quality.Ready && !quality.Failed) {
 				processing = true
-				break
+			}
+			kind := strings.ToUpper(strings.TrimSpace(quality.Type))
+			if kind != "" {
+				if _, exists := seenTypes[kind]; !exists {
+					seenTypes[kind] = struct{}{}
+					videoTypes = append(videoTypes, kind)
+				}
 			}
 		}
 		fileID := link.File.ID
@@ -59,6 +71,7 @@ func (s *Service) buildLinkListItems(links []models.Link) *[]LinkListItem {
 			Thumbnail:         s.ResolvedThumbnailURL(link),
 			Processing:        processing,
 			PublicationStatus: derivePublicationStatus(link.File, task.Status, hasTask),
+			VideoTypes:        videoTypes,
 		})
 	}
 	return &items
