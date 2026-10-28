@@ -19,6 +19,7 @@ import (
 
 func (w *WorkerGroup) HLSConverter(ctx context.Context) {
 	if ctx == nil { ctx = context.Background() }
+	w.recoverInterruptedConversions()
 	for {
 		cfg := w.Config()
 		if cfg.HLSConverterIntervalMins <= 0 {
@@ -39,6 +40,15 @@ func (w *WorkerGroup) HLSConverter(ctx context.Context) {
 	}
 }
 
+func (w *WorkerGroup) recoverInterruptedConversions() {
+	now := time.Now()
+	if err := w.deps.DB.Model(&models.Quality{}).Where("type IN ? AND encoding = ?", []string{"mp4", "mkv"}, true).Updates(map[string]interface{}{"encoding": false, "progress": 0}).Error; err != nil {
+		log.Printf("[HLSConverter] Failed to release interrupted conversion claims: %v", err)
+	}
+	if err := w.deps.DB.Model(&models.ConverterLog{}).Where("status = ?", "processing").Updates(map[string]interface{}{"status": "failed", "error": "converter restarted before attempt completed", "finished_at": now}).Error; err != nil {
+		log.Printf("[HLSConverter] Failed to close interrupted attempt logs: %v", err)
+	}
+}
 func (w *WorkerGroup) normalEncodingQueueIdle() bool {
 	for _, model := range []interface{}{&models.Quality{}, &models.Audio{}, &models.Subtitle{}} {
 		var count int64
