@@ -142,7 +142,10 @@ func (w *WorkerGroup) convertOne(ctx context.Context, q models.Quality, file mod
 		w.deps.DB.Model(&row).Updates(map[string]interface{}{"status":status,"error":errText(lastErr),"playlist_valid":playlistOK,"segments_valid":segmentsOK,"finished_at":finished,"duration_ms":finished.Sub(attemptStart).Milliseconds()})
 		if lastErr == nil {
 			if err := w.deps.DB.Model(&models.Quality{}).Where("id = ? AND type = ? AND encoding = ?", q.ID, "mp4", true).
-				Updates(map[string]interface{}{"type":"hls","output_file":"master.m3u8","path":converterStoredPath(w.Config().PublishedQualitysRoot(), outDir),"encoding":false,"progress":100,"ready":true,"failed":false,"error":""}).Error; err != nil { lastErr = err } else {
+				Updates(map[string]interface{}{"type":"hls","output_file":"master.m3u8","path":converterStoredPath(w.Config().PublishedQualitysRoot(), outDir),"encoding":false,"progress":100,"ready":true,"failed":false,"error":""}).Error; err != nil {
+				lastErr = err
+				w.deps.DB.Model(&row).Updates(map[string]interface{}{"status":"failed","error":errText(err)})
+			} else {
 				return nil
 			}
 		}
@@ -153,29 +156,20 @@ func (w *WorkerGroup) convertOne(ctx context.Context, q models.Quality, file mod
 }
 
 func packageHLS(ctx context.Context, input, outDir string) error {
-	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries", "stream=codec_type,codec_name", "-of", "default=noprint_wrappers=1", input)
+	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries", "stream=codec_type,codec_name", "-of", "compact=p=0:nk=0", input)
 	output, err := probe.Output()
 	if err != nil { return fmt.Errorf("ffprobe failed: %w", err) }
 	hasVideo := false
-	codecName := ""
-	codecType := ""
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		parts := strings.SplitN(strings.TrimSpace(line), "=", 2)
-		if len(parts) != 2 { continue }
-		switch parts[0] {
-		case "codec_name": codecName = strings.ToLower(parts[1])
-		case "codec_type":
-			codecType = strings.ToLower(parts[1])
-			if codecType == "video" {
-				if codecName != "" && codecName != "h264" { return fmt.Errorf("unsupported video codec %q; stream copy only", codecName) }
-				hasVideo = true
-			}
-			if codecType == "audio" && codecName != "" && codecName != "aac" && codecName != "mp3" && codecName != "ac3" {
-				return fmt.Errorf("unsupported audio codec %q; stream copy only", codecName)
-			}
+		codec, kind := "", ""
+		for _, field := range strings.Split(line, "|") {
+			parts := strings.SplitN(field, "=", 2)
+			if len(parts) != 2 { continue }
+			if parts[0] == "codec_name" { codec = strings.ToLower(parts[1]) }
+			if parts[0] == "codec_type" { kind = strings.ToLower(parts[1]) }
 		}
-		if codecType == "video" && codecName != "" && codecName != "h264" { return fmt.Errorf("unsupported video codec %q; stream copy only", codecName) }
-		if codecType == "audio" && codecName != "" && codecName != "aac" && codecName != "mp3" && codecName != "ac3" { return fmt.Errorf("unsupported audio codec %q; stream copy only", codecName) }
+		if kind == "video" { if codec != "h264" { return fmt.Errorf("unsupported video codec %q; stream copy only", codec) }; hasVideo = true }
+		if kind == "audio" && codec != "aac" && codec != "mp3" && codec != "ac3" { return fmt.Errorf("unsupported audio codec %q; stream copy only", codec) }
 	}
 	if !hasVideo { return fmt.Errorf("no H.264 video stream found") }
 	media := filepath.Join(outDir, "video.m3u8")
@@ -237,6 +231,9 @@ func (w *WorkerGroup) cleanupConvertedOriginals(ctx context.Context, limit int) 
 		if err := os.Remove(row.InputPath); err != nil {
 			log.Printf("[HLSConverter] Cleanup failed for %s: %v", row.InputPath, err)
 			continue
+		}
+		if err := w.deps.DB.Model(&row).Update("status", "cleaned_up").Error; err != nil {
+			log.Printf("[HLSConverter] Original removed but conversion log status update failed for %s: %v", row.InputPath, err)
 		}
 		now := time.Now()
 		if err := w.deps.DB.Create(&models.ConverterLog{FileID:row.FileID, QualityID:row.QualityID, InputPath:row.InputPath, OutputPath:row.OutputPath, CycleKey:row.CycleKey, Status:"cleanup_success", StartedAt:now, FinishedAt:&now}).Error; err != nil {
