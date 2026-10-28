@@ -66,6 +66,11 @@ func (s *Service) createFile(
 	externalSubs []models.Subtitle,
 	forceDirect bool,
 ) (status int, newFile *models.Link, cloned bool, err error) {
+	// Keep the display title separate from the uploaded media's file extension.
+	// The extension is inferred from the actual media path/content when needed.
+	if ext := filepath.Ext(fileName); ext != "" {
+		fileName = strings.TrimSuffix(fileName, ext)
+	}
 	// Direct assets are staged under FolderVideoQualitysPriv/<file UUID> and
 	// published by the existing publisher. If database setup fails part-way
 	// through, remove that newly-created staging tree rather than leave an
