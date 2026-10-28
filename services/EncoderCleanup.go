@@ -26,6 +26,14 @@ func (w *WorkerGroup) EncoderCleanup(ctx context.Context) {
 This function deletes the originally uploaded file after all qualitys and subtitles were encoded
 */
 func (w *WorkerGroup) runEncoderCleanup() {
+	// Keep converted source deletion centralized in this worker. The setting
+	// controls only converter-input cleanup; normal uploaded-file cleanup below
+	// retains its existing behavior.
+	cfg := w.Config()
+	if cfg.HLSConverterDeleteOrginal {
+		w.cleanupConvertedOriginals(context.Background(), int(cfg.HLSConverterBatchSize))
+	}
+
 	var dbReadyFiles []models.File
 	if res := w.deps.DB.
 		Preload("Qualitys").
@@ -106,5 +114,62 @@ func (w *WorkerGroup) runEncoderCleanup() {
 				log.Printf("Failed to save file after cleanup (file ID %d): %v", dbReadyFile.ID, err)
 			}
 		}
+	}
+}
+
+
+// cleanupConvertedOriginals removes converter inputs only after a successful
+// conversion produced a valid HLS playlist and all referenced segments exist.
+// HLSConverter is responsible for conversion only and never deletes source files.
+func (w *WorkerGroup) cleanupConvertedOriginals(ctx context.Context, limit int) {
+	if limit < 1 {
+		limit = 2
+	}
+
+	var logs []models.ConverterLog
+	if err := w.deps.DB.
+		Where("status = ? AND input_path <> '' AND output_path <> ''", "success").
+		Order("created_at ASC").
+		Limit(limit * 4).
+		Find(&logs).Error; err != nil {
+		log.Printf("[EncoderCleanup] Converter cleanup query failed: %v", err)
+		return
+	}
+
+	removed := 0
+	for _, row := range logs {
+		if ctx.Err() != nil || removed >= limit {
+			return
+		}
+		if _, err := os.Stat(row.InputPath); err != nil {
+			if os.IsNotExist(err) {
+				_ = w.deps.DB.Model(&row).Update("status", "cleaned_up").Error
+			}
+			continue
+		}
+		if ok, segmentsOK, err := validateHLS(row.OutputPath); err != nil || !ok || !segmentsOK {
+			continue
+		}
+
+		master, err := os.ReadFile(filepath.Join(row.OutputPath, "master.m3u8"))
+		if err != nil || !strings.Contains(string(master), "video.m3u8") {
+			continue
+		}
+		if err := os.Remove(row.InputPath); err != nil {
+			log.Printf("[EncoderCleanup] Failed to remove converted source %s: %v", row.InputPath, err)
+			continue
+		}
+		if err := w.deps.DB.Model(&row).Update("status", "cleaned_up").Error; err != nil {
+			log.Printf("[EncoderCleanup] Source removed but conversion log update failed for %s: %v", row.InputPath, err)
+		}
+		now := time.Now()
+		if err := w.deps.DB.Create(&models.ConverterLog{
+			FileID: row.FileID, QualityID: row.QualityID, InputPath: row.InputPath,
+			OutputPath: row.OutputPath, CycleKey: row.CycleKey, Status: "cleanup_success",
+			StartedAt: now, FinishedAt: &now,
+		}).Error; err != nil {
+			log.Printf("[EncoderCleanup] Source removed but audit log creation failed for %s: %v", row.InputPath, err)
+		}
+		removed++
 	}
 }
