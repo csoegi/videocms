@@ -32,10 +32,8 @@ func (w *WorkerGroup) HLSConverter(ctx context.Context) {
 			log.Printf("[HLSConverter] Normal encoding queue busy; skipping this cycle")
 			continue
 		}
-		if cfg.HLSConverterDeleteOrginal {
-			w.cleanupConvertedOriginals(ctx, int(cfg.HLSConverterBatchSize))
-			continue
-		}
+		// This worker only converts legacy MP4/MKV qualities. Original-file
+		// deletion is centralized in EncoderCleanup.
 		w.convertLegacyBatch(ctx, int(cfg.HLSConverterBatchSize))
 	}
 }
@@ -223,35 +221,6 @@ func (w *WorkerGroup) logConverterFailure(q models.Quality, file models.File, in
 	return cause
 }
 
-func (w *WorkerGroup) cleanupConvertedOriginals(ctx context.Context, limit int) {
-	if limit < 1 { limit = 2 }
-	var logs []models.ConverterLog
-	if err := w.deps.DB.Where("status = ? AND input_path <> ''", "success").Order("created_at DESC").Limit(limit * 4).Find(&logs).Error; err != nil {
-		log.Printf("[HLSConverter] Cleanup log query failed: %v", err)
-		return
-	}
-	removed := 0
-	for _, row := range logs {
-		if ctx.Err() != nil || removed >= limit { return }
-		if _, err := os.Stat(row.InputPath); err != nil { continue }
-		if row.OutputPath == "" { continue }
-		if ok, _, err := validateHLS(row.OutputPath); err != nil || !ok { continue }
-		master, err := os.ReadFile(filepath.Join(row.OutputPath, "master.m3u8"))
-		if err != nil || !strings.Contains(string(master), "video.m3u8") { continue }
-		if err := os.Remove(row.InputPath); err != nil {
-			log.Printf("[HLSConverter] Cleanup failed for %s: %v", row.InputPath, err)
-			continue
-		}
-		if err := w.deps.DB.Model(&row).Update("status", "cleaned_up").Error; err != nil {
-			log.Printf("[HLSConverter] Original removed but conversion log status update failed for %s: %v", row.InputPath, err)
-		}
-		now := time.Now()
-		if err := w.deps.DB.Create(&models.ConverterLog{FileID:row.FileID, QualityID:row.QualityID, InputPath:row.InputPath, OutputPath:row.OutputPath, CycleKey:row.CycleKey, Status:"cleanup_success", StartedAt:now, FinishedAt:&now}).Error; err != nil {
-			log.Printf("[HLSConverter] Original deleted but cleanup audit log failed for %s: %v", row.InputPath, err)
-		}
-		removed++
-	}
-}
 
 func converterStoredPath(root, outDir string) string {
 	rel, err := filepath.Rel(root, filepath.Join(outDir, "master.m3u8"))
