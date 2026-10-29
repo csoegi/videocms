@@ -91,6 +91,13 @@ func (w *WorkerGroup) claimLegacyQuality() (models.Quality, models.File, string,
 			if err != nil || !info.Mode().IsRegular() { continue }
 			hash := sha256.Sum256([]byte(fmt.Sprintf("%d:%d:%d", q.ID, info.Size(), info.ModTime().UnixNano())))
 			key := hex.EncodeToString(hash[:])
+			var unsupported int64
+			if err := tx.Model(&models.ConverterLog{}).Where("quality_id = ? AND cycle_key = ? AND status = ?", q.ID, key, "unsupported").Count(&unsupported).Error; err != nil { return err }
+			if unsupported > 0 {
+				// This exact media file has already been classified as unsupported
+				// for stream-copy HLS conversion. Leave it published as MP4/MKV.
+				continue
+			}
 			var failures int64
 			if err := tx.Model(&models.ConverterLog{}).Where("quality_id = ? AND cycle_key = ? AND status = ?", q.ID, key, "failed").Count(&failures).Error; err != nil { return err }
 			if failures >= 2 { continue }
@@ -136,6 +143,23 @@ func (w *WorkerGroup) convertOne(ctx context.Context, q models.Quality, file mod
 		if err := w.deps.DB.Create(&row).Error; err != nil { lastErr = err; break }
 		attemptDir := filepath.Join(temp, fmt.Sprintf("attempt-%d", attempt))
 		if err := os.MkdirAll(attemptDir, 0755); err != nil { lastErr = err } else { lastErr = packageHLS(ctx, input, attemptDir) }
+		if isUnsupportedStreamCopyCodec(lastErr) {
+			finished := time.Now()
+			if err := w.deps.DB.Model(&row).Updates(map[string]interface{}{
+				"status": "unsupported",
+				"error": errText(lastErr),
+				"finished_at": finished,
+				"duration_ms": finished.Sub(attemptStart).Milliseconds(),
+			}).Error; err != nil {
+				log.Printf("[HLSConverter] Failed to record unsupported codec for quality %d: %v", q.ID, err)
+			}
+			if err := w.deps.DB.Model(&models.Quality{}).Where("id = ?", q.ID).
+				Updates(map[string]interface{}{"encoding": false, "failed": false, "error": ""}).Error; err != nil {
+				return fmt.Errorf("failed to restore published state after unsupported codec detection: %w", err)
+			}
+			log.Printf("[HLSConverter] Quality %d remains available as %s; stream-copy HLS conversion skipped: %v", q.ID, strings.ToUpper(filepath.Ext(input)[1:]), lastErr)
+			return nil
+		}
 		playlistOK, segmentsOK := false, false
 		if lastErr == nil { playlistOK, segmentsOK, lastErr = validateHLS(attemptDir) }
 		if lastErr == nil {
@@ -194,6 +218,15 @@ func (w *WorkerGroup) converterArchiveTitle(file models.File) string {
 		if title := strings.TrimSpace(link.Name); title != "" { return title }
 	}
 	return file.UUID
+}
+
+func isUnsupportedStreamCopyCodec(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.HasPrefix(message, "unsupported video codec ") ||
+		strings.HasPrefix(message, "unsupported audio codec ")
 }
 
 func packageHLS(ctx context.Context, input, outDir string) error {
