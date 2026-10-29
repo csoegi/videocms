@@ -1,6 +1,7 @@
 package logic
 
 import (
+	"io"
 	"ch/kirari04/videocms/config"
 	"ch/kirari04/videocms/helpers"
 	"ch/kirari04/videocms/models"
