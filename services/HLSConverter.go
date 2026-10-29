@@ -46,6 +46,30 @@ func (w *WorkerGroup) recoverInterruptedConversions() {
 	if err := w.deps.DB.Model(&models.ConverterLog{}).Where("status = ?", "processing").Updates(map[string]interface{}{"status": "failed", "error": "converter restarted before attempt completed", "finished_at": now}).Error; err != nil {
 		log.Printf("[HLSConverter] Failed to close interrupted attempt logs: %v", err)
 	}
+
+	// Older converter versions marked an already-published MP4/MKV as failed
+	// when stream-copy conversion encountered an unsupported codec. Reclassify
+	// those attempts so the source remains published and is not retried.
+	if err := w.deps.DB.Model(&models.ConverterLog{}).
+		Where("status = ? AND (error LIKE ? OR error LIKE ?)", "failed", "unsupported video codec %", "unsupported audio codec %").
+		Update("status", "unsupported").Error; err != nil {
+		log.Printf("[HLSConverter] Failed to reclassify older unsupported-codec attempts: %v", err)
+	}
+	var unsupportedQualityIDs []uint
+	if err := w.deps.DB.Model(&models.ConverterLog{}).
+		Distinct("quality_id").
+		Where("status = ? AND (error LIKE ? OR error LIKE ?)", "unsupported", "unsupported video codec %", "unsupported audio codec %").
+		Pluck("quality_id", &unsupportedQualityIDs).Error; err != nil {
+		log.Printf("[HLSConverter] Failed to find published files with unsupported codecs: %v", err)
+	} else if len(unsupportedQualityIDs) > 0 {
+		if err := w.deps.DB.Model(&models.Quality{}).
+			Where("id IN ? AND type IN ?", unsupportedQualityIDs, []string{"mp4", "mkv"}).
+			Updates(map[string]interface{}{"encoding": false, "failed": false, "error": ""}).Error; err != nil {
+			log.Printf("[HLSConverter] Failed to restore Ready state for unsupported-codec MP4/MKV qualities: %v", err)
+		} else {
+			log.Printf("[HLSConverter] Restored Ready state for %d MP4/MKV qualities with unsupported stream-copy codecs", len(unsupportedQualityIDs))
+		}
+	}
 }
 func (w *WorkerGroup) normalEncodingQueueIdle() bool {
 	for _, model := range []interface{}{&models.Quality{}, &models.Audio{}, &models.Subtitle{}} {
