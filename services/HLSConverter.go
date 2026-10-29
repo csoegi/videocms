@@ -151,7 +151,7 @@ func (w *WorkerGroup) convertOne(ctx context.Context, q models.Quality, file mod
 		if lastErr == nil && !archiveSucceeded {
 			archivedPath, archiveErr := archiveConvertedOriginal(input, w.Config().FolderVideoArchives, w.converterArchiveTitle(file), filepath.Ext(input), file.UUID)
 			if archiveErr != nil {
-				log.Printf("[HLSConverter] Could not archive original %s; keeping it available and continuing: %v", input, archiveErr)
+				log.Printf("[HLSConverter] Could not archive original %s; conversion will continue and source removal will still be attempted: %v", input, archiveErr)
 			} else {
 				archivePath = archivedPath
 				archiveSucceeded = true
