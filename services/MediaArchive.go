@@ -55,7 +55,7 @@ func sanitizeConvertedArchiveTitle(title string) string {
 		} else if (r == '-' || r == '_') && b.Len() > 0 {
 			if !lastSeparator {
 				if b.Len()+1 > 160 { break }
-				b.WriteByte(r)
+				b.WriteRune(r)
 				lastSeparator = true
 			}
 		} else if b.Len() > 0 && !lastSeparator {
