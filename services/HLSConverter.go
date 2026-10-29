@@ -168,17 +168,15 @@ func (w *WorkerGroup) convertOne(ctx context.Context, q models.Quality, file mod
 				lastErr = err
 				w.deps.DB.Model(&row).Updates(map[string]interface{}{"status":"failed","error":errText(err)})
 			} else {
-				// Archiving succeeded, and HLS conversion is now committed in the DB.
-				// Remove the quality-folder copy so the archive is the only retained
-				// original. If archiving failed, keep the source available for MP4 download.
-				if archiveSucceeded {
-					removeErr := os.Remove(input)
-					if removeErr != nil && !os.IsNotExist(removeErr) {
-						log.Printf("[HLSConverter] Conversion succeeded and archive exists, but could not remove original %s: %v", input, removeErr)
-					} else {
-						if err := w.deps.DB.Model(&models.File{}).Where("id = ?", file.ID).Update("path", "").Error; err != nil {
-							log.Printf("[HLSConverter] Removed archived original %s but could not clear File.Path: %v", input, err)
-						}
+				// Conversion and HLS database state are committed. Remove the original
+				// regardless of archive outcome to avoid retaining duplicate MP4/MKV
+				// files in the quality tree. Archive failures are intentionally non-fatal.
+				removeErr := os.Remove(input)
+				if removeErr != nil && !os.IsNotExist(removeErr) {
+					log.Printf("[HLSConverter] Conversion succeeded, but could not remove original %s: %v", input, removeErr)
+				} else {
+					if err := w.deps.DB.Model(&models.File{}).Where("id = ?", file.ID).Update("path", "").Error; err != nil {
+						log.Printf("[HLSConverter] Removed original %s but could not clear File.Path: %v", input, err)
 					}
 				}
 				return nil
