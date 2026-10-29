@@ -128,6 +128,8 @@ func (w *WorkerGroup) convertOne(ctx context.Context, q models.Quality, file mod
 	if err != nil { return w.logConverterFailure(q, file, input, outDir, cycle, 1, started, err) }
 	defer os.RemoveAll(temp)
 	var lastErr error
+	var archivePath string
+	archiveSucceeded := false
 	for attempt := 1; attempt <= 2; attempt++ {
 		attemptStart := time.Now()
 		row := models.ConverterLog{FileID:file.ID, QualityID:q.ID, InputPath:input, OutputPath:outDir, CycleKey:cycle, Attempt:attempt, Status:"processing", StartedAt:attemptStart}
@@ -144,6 +146,18 @@ func (w *WorkerGroup) convertOne(ctx context.Context, q models.Quality, file mod
 				}
 			}
 		}
+		// Archive only after HLS output validation and final placement. Archive
+		// errors are non-fatal and must not prevent the conversion DB update.
+		if lastErr == nil && !archiveSucceeded {
+			archivedPath, archiveErr := archiveConvertedOriginal(input, w.Config().FolderVideoArchives, w.converterArchiveTitle(file), filepath.Ext(input), file.UUID)
+			if archiveErr != nil {
+				log.Printf("[HLSConverter] Could not archive original %s; keeping it available and continuing: %v", input, archiveErr)
+			} else {
+				archivePath = archivedPath
+				archiveSucceeded = true
+				log.Printf("[HLSConverter] Archived original media: %s", archivePath)
+			}
+		}
 		finished := time.Now()
 		status := "failed"
 		if lastErr == nil { status = "success" }
@@ -154,6 +168,18 @@ func (w *WorkerGroup) convertOne(ctx context.Context, q models.Quality, file mod
 				lastErr = err
 				w.deps.DB.Model(&row).Updates(map[string]interface{}{"status":"failed","error":errText(err)})
 			} else {
+				// Delete only when configured and the archive copy exists. If
+				// archiving fails, retain the original for MP4/MKV download.
+				if w.Config().HLSConverterDeleteOrginal && archiveSucceeded {
+					removeErr := os.Remove(input)
+					if removeErr != nil && !os.IsNotExist(removeErr) {
+						log.Printf("[HLSConverter] Conversion succeeded, but could not remove original %s: %v", input, removeErr)
+					} else if filepath.Clean(file.Path) == filepath.Clean(input) {
+						if err := w.deps.DB.Model(&models.File{}).Where("id = ? AND path = ?", file.ID, file.Path).Update("path", "").Error; err != nil {
+							log.Printf("[HLSConverter] Removed archived original %s but could not clear File.Path: %v", input, err)
+						}
+					}
+				}
 				return nil
 			}
 		}
@@ -161,6 +187,14 @@ func (w *WorkerGroup) convertOne(ctx context.Context, q models.Quality, file mod
 	}
 	w.deps.DB.Model(&models.Quality{}).Where("id = ?", q.ID).Updates(map[string]interface{}{"encoding":false,"failed":true,"error":errText(lastErr)})
 	return lastErr
+}
+
+func (w *WorkerGroup) converterArchiveTitle(file models.File) string {
+	var link models.Link
+	if err := w.deps.DB.Where("file_id = ?", file.ID).Order("id ASC").First(&link).Error; err == nil {
+		if title := strings.TrimSpace(link.Name); title != "" { return title }
+	}
+	return file.UUID
 }
 
 func packageHLS(ctx context.Context, input, outDir string) error {

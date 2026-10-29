@@ -38,7 +38,16 @@ func (w *WorkerGroup) runEncoderCleanup() {
 		return
 	}
 
+	var converterFileIDs []uint
+	if err := w.deps.DB.Model(&models.ConverterLog{}).Distinct("file_id").Pluck("file_id", &converterFileIDs).Error; err != nil {
+		log.Printf("Failed to load HLS-converter-managed files; skipping encoder cleanup to avoid deleting their originals: %v", err)
+		return
+	}
+	converterManaged := make(map[uint]struct{}, len(converterFileIDs))
+	for _, fileID := range converterFileIDs { converterManaged[fileID] = struct{}{} }
+
 	for _, dbReadyFile := range dbReadyFiles {
+		if _, managedByConverter := converterManaged[dbReadyFile.ID]; managedByConverter { continue }
 		// Direct MP4/MKV qualities are the final media asset, not an encoded
 		// derivative. Never delete their source path through encoder cleanup.
 		hasDirectMedia := false

@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"math"
 	"net/http"
@@ -17,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -77,17 +75,11 @@ func (s *Service) createFile(
 	// through, remove that newly-created staging tree rather than leave an
 	// orphaned direct-media file behind.
 	directStageRoot := ""
-	directArchivePath := ""
 	directSetupComplete := false
 	defer func() {
 		if directStageRoot != "" && !directSetupComplete {
 			if err := os.RemoveAll(directStageRoot); err != nil {
 				log.Printf("[Logic->CreateFile] Failed to clean incomplete direct-media staging directory %s: %v", directStageRoot, err)
-			}
-		}
-		if directArchivePath != "" && !directSetupComplete {
-			if err := os.Remove(directArchivePath); err != nil && !os.IsNotExist(err) {
-				log.Printf("[Logic->CreateFile] Failed to remove archive for incomplete direct-media registration %s: %v", directArchivePath, err)
 			}
 		}
 	}()
@@ -264,14 +256,8 @@ func (s *Service) createFile(
 			return http.StatusInternalServerError, nil, false, fmt.Errorf("failed to prepare direct-media staging directory: %w", err)
 		}
 		directPath := filepath.Join(directQualityDir, outputFile)
-		// Preserve a separate archive copy of the original direct MP4/MKV.
-		// The published quality copy remains untouched so playback and the
-		// existing HLS converter continue to work exactly as before.
-		archivePath, archiveErr := archiveDirectMediaFile(*fromFile, s.Config().FolderVideoArchives, fileName, directContainer, fileId)
-		if archiveErr != nil {
-			return http.StatusInternalServerError, nil, false, fmt.Errorf("failed to archive original direct media: %w", archiveErr)
-		}
-		directArchivePath = archivePath
+		// Original archiving is deferred until the HLS converter has produced
+		// and validated its output, avoiding an extra copy at upload time.
 		if err := moveFileToPath(*fromFile, directPath); err != nil {
 			return http.StatusInternalServerError, nil, false, fmt.Errorf("failed to stage direct media: %w", err)
 		}
@@ -612,119 +598,6 @@ func (s *Service) createFile(
 	return http.StatusOK, &dbLink, false, nil
 }
 
-
-func archiveDirectMediaFile(source, archiveRoot, title, extension, fileID string) (string, error) {
-	if strings.TrimSpace(archiveRoot) == "" {
-		archiveRoot = "./videos/archives"
-	}
-	extension = strings.TrimPrefix(strings.ToLower(extension), ".")
-	if extension != "mp4" && extension != "mkv" {
-		return "", fmt.Errorf("unsupported direct-media archive extension %q", extension)
-	}
-
-	// Use the source file's actual extension when available, not the display title.
-	if sourceExtension := strings.TrimPrefix(strings.ToLower(filepath.Ext(source)), "."); sourceExtension == "mp4" || sourceExtension == "mkv" {
-		extension = sourceExtension
-	}
-
-	safeTitle := sanitizeArchiveTitle(trimArchiveContainerMarker(title, extension))
-	suffix := strings.ReplaceAll(strings.ToLower(fileID), "-", "")
-	if suffix == "" {
-		suffix = strings.ReplaceAll(uuid.NewString(), "-", "")
-	}
-	if len(suffix) > 8 {
-		suffix = suffix[:8]
-	}
-	archiveName := fmt.Sprintf("%s_%d_%s.%s", safeTitle, time.Now().UnixMilli(), suffix, extension)
-	archivePath := filepath.Join(archiveRoot, archiveName)
-
-	if err := os.MkdirAll(archiveRoot, 0755); err != nil {
-		return "", fmt.Errorf("create archive directory %s: %w", archiveRoot, err)
-	}
-	if err := copyOriginalToArchive(source, archivePath); err != nil {
-		return "", fmt.Errorf("copy %s to archive %s: %w", source, archivePath, err)
-	}
-	log.Printf("[Logic->CreateFile] Archived original direct media: %s", archivePath)
-	return archivePath, nil
-}
-
-func trimArchiveContainerMarker(title, extension string) string {
-	// Some remote-download titles already end with a container marker such as
-	// "-mp4" even though the actual file extension is appended separately.
-	// Remove only a trailing marker matching the source container.
-	title = strings.TrimSpace(title)
-	lowerTitle := strings.ToLower(title)
-	marker := strings.ToLower(extension)
-	for _, separator := range []string{"-", "_", ".", " "} {
-		suffix := separator + marker
-		if strings.HasSuffix(lowerTitle, suffix) && len(title) > len(suffix) {
-			return strings.TrimSpace(title[:len(title)-len(suffix)])
-		}
-	}
-	return title
-}
-
-func sanitizeArchiveTitle(title string) string {
-	var b strings.Builder
-	lastSeparator := false
-	for _, r := range strings.TrimSpace(title) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			piece := string(r)
-			// Keep the filename below common 255-byte component limits after
-			// adding the timestamp, UUID suffix, separators, and extension.
-			if b.Len()+len(piece) > 160 {
-				break
-			}
-			b.WriteString(piece)
-			lastSeparator = false
-		} else if (r == '-' || r == '_') && b.Len() > 0 {
-			// Preserve meaningful separators in catalogue codes, but collapse
-			// repeated punctuation/spacing to one separator.
-			if !lastSeparator {
-				if b.Len()+1 > 160 {
-					break
-				}
-				b.WriteByte(r)
-				lastSeparator = true
-			}
-		} else if b.Len() > 0 && !lastSeparator {
-			if b.Len()+1 > 160 {
-				break
-			}
-			b.WriteByte('-')
-			lastSeparator = true
-		}
-	}
-	name := strings.Trim(b.String(), "-_")
-	if name == "" {
-		return "video"
-	}
-	return name
-}
-
-func copyOriginalToArchive(source, destination string) error {
-	input, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer input.Close()
-
-	output, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(output, input)
-	closeErr := output.Close()
-	if copyErr != nil {
-		_ = os.Remove(destination)
-		return copyErr
-	}
-	if closeErr != nil {
-		_ = os.Remove(destination)
-		return closeErr
-	}
-	return nil
-}
 
 // moveFileToPath prefers an atomic rename and falls back to a copy when the
 // upload/staging directories are on different filesystems.
