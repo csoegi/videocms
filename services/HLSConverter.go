@@ -138,7 +138,20 @@ func (w *WorkerGroup) claimLegacyQuality() (models.Quality, models.File, string,
 
 func resolveConverterInput(root string, file models.File, q models.Quality) string {
 	candidates := []string{}
-	if filepath.IsAbs(q.Path) { candidates = append(candidates, q.Path) }
+
+	// Direct-media quality paths are normally directories, while OutputFile
+	// contains the actual source name (for example, video.mkv). Resolve that
+	// exact filename first so MKV is not silently skipped by MP4-only fallbacks.
+	outputName := strings.TrimSpace(q.OutputFile)
+	if outputName != "" {
+		outputName = filepath.Base(outputName)
+		candidates = append(candidates, filepath.Join(q.Path, outputName))
+		candidates = append(candidates, filepath.Join(root, file.UUID, q.Name, outputName))
+	}
+
+	if filepath.IsAbs(q.Path) {
+		candidates = append(candidates, q.Path)
+	}
 	candidates = append(candidates,
 		filepath.Join(root, q.Path),
 		filepath.Join(root, file.UUID, q.Path),
@@ -146,9 +159,13 @@ func resolveConverterInput(root string, file models.File, q models.Quality) stri
 		filepath.Join(root, file.UUID, q.Name, "video.mp4"),
 		filepath.Join(root, file.UUID, q.Name, "original.mp4"))
 	for _, candidate := range candidates {
-		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() { return candidate }
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			return candidate
+		}
 	}
-	if len(candidates) == 0 { return filepath.Join(root, file.UUID, filepath.Base(q.Path)) }
+	if len(candidates) == 0 {
+		return filepath.Join(root, file.UUID, filepath.Base(q.Path))
+	}
 	return candidates[0]
 }
 
