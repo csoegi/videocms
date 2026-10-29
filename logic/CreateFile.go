@@ -627,7 +627,7 @@ func archiveDirectMediaFile(source, archiveRoot, title, extension, fileID string
 		extension = sourceExtension
 	}
 
-	safeTitle := sanitizeArchiveTitle(title)
+	safeTitle := sanitizeArchiveTitle(trimArchiveContainerMarker(title, extension))
 	suffix := strings.ReplaceAll(strings.ToLower(fileID), "-", "")
 	if suffix == "" {
 		suffix = strings.ReplaceAll(uuid.NewString(), "-", "")
@@ -648,11 +648,27 @@ func archiveDirectMediaFile(source, archiveRoot, title, extension, fileID string
 	return archivePath, nil
 }
 
+func trimArchiveContainerMarker(title, extension string) string {
+	// Some remote-download titles already end with a container marker such as
+	// "-mp4" even though the actual file extension is appended separately.
+	// Remove only a trailing marker matching the source container.
+	title = strings.TrimSpace(title)
+	lowerTitle := strings.ToLower(title)
+	marker := strings.ToLower(extension)
+	for _, separator := range []string{"-", "_", ".", " "} {
+		suffix := separator + marker
+		if strings.HasSuffix(lowerTitle, suffix) && len(title) > len(suffix) {
+			return strings.TrimSpace(title[:len(title)-len(suffix)])
+		}
+	}
+	return title
+}
+
 func sanitizeArchiveTitle(title string) string {
 	var b strings.Builder
 	lastSeparator := false
 	for _, r := range strings.TrimSpace(title) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			piece := string(r)
 			// Keep the filename below common 255-byte component limits after
 			// adding the timestamp, UUID suffix, separators, and extension.
@@ -661,7 +677,20 @@ func sanitizeArchiveTitle(title string) string {
 			}
 			b.WriteString(piece)
 			lastSeparator = false
+		} else if (r == '-' || r == '_') && b.Len() > 0 {
+			// Preserve meaningful separators in catalogue codes, but collapse
+			// repeated punctuation/spacing to one separator.
+			if !lastSeparator {
+				if b.Len()+1 > 160 {
+					break
+				}
+				b.WriteByte(r)
+				lastSeparator = true
+			}
 		} else if b.Len() > 0 && !lastSeparator {
+			if b.Len()+1 > 160 {
+				break
+			}
 			b.WriteByte('-')
 			lastSeparator = true
 		}
