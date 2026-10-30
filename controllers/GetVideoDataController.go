@@ -23,7 +23,7 @@ func (h *Handlers) GetVideoData(c echo.Context) error {
 	}
 
 	reQUALITY := regexp.MustCompile(`^([0-9]{3,4}p|(h264))$`)
-	reFILE := regexp.MustCompile(`^out[0-9]{0,4}\.(m3u8|ts|webm|mp4)$`)
+	reFILE := regexp.MustCompile(`^(out[0-9]{0,4}|video)\.(m3u8|ts|webm|mp4)$`)
 	if !reQUALITY.MatchString(requestValidation.QUALITY) {
 		return c.String(http.StatusBadRequest, "bad quality format")
 	}

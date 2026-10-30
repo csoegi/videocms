@@ -71,6 +71,9 @@ type Config struct {
 
 	MaxItemsMultiDelete int64
 	MaxRunningEncodes   int64
+	HLSConverterIntervalMins int64
+	HLSConverterBatchSize int64
+	HLSConverterDeleteOrginal bool
 	MaxFramerate        int64
 
 	MaxUploadFilesize  int64
@@ -81,6 +84,7 @@ type Config struct {
 	FolderVideoQualitysPub   string `validate:"required,min=1,max=255"`
 	FolderVideoQualitysPriv  string `validate:"required,min=1,max=255"` // local staging root
 	FolderVideoQualitysFinal string `validate:"required,min=1,max=255"` // published storage root
+	FolderVideoArchives      string `validate:"required,min=1,max=255"` // archive copies of direct MP4/MKV originals
 	FolderVideoUploadsPriv   string `validate:"required,min=1,max=255"`
 	PublisherMode            string
 	PublisherSSHHost         string
@@ -281,6 +285,7 @@ func LoadEnv() Config {
 
 	env.FolderVideoQualitysPriv = getEnv("FolderVideoQualitysPriv", "./videos/staging")
 	env.FolderVideoQualitysFinal = getEnv("FolderVideoQualitysFinal", "./videos/qualitys")
+	env.FolderVideoArchives = getEnv("FolderVideoArchives", "./videos/archives")
 	env.FolderVideoQualitysPub = getEnv("FolderVideoQualitysPub", "/videos/qualitys")
 	env.FolderVideoUploadsPriv = getEnv("FolderVideoUploadsPriv", "./videos/uploads")
 	env.PublisherMode = getEnv("PublisherMode", "local")

@@ -370,7 +370,6 @@
             src="{{.StreamUrl}}"
             poster="{{ .Thumbnail }}"
             view-type="video"
-            crossorigin
             playsinline
         >
             <media-provider>
@@ -791,10 +790,26 @@
             }
         }
 
-        function isMainVideoSource() {
-            const activeSrc = normalizedMediaURL(player.src || player.getAttribute("src") || player.currentSrc || "");
+        function isMainVideoSource(source = "") {
+            // The player may switch to ADS_LINK without changing provider type.
+            // Prefer the source-change event payload; fall back to the player's current source.
+            const sourceToCheck = source || player.src || player.getAttribute("src") || player.currentSrc || "";
+            const activeSrc = normalizedMediaURL(sourceToCheck);
             if (!activeSrc || !streamUrl) return true;
             return activeSrc === normalizedMediaURL(streamUrl);
+        }
+
+        function applyNativeVideoCredentialPolicy(provider, source = "") {
+            if (!provider || provider.type !== "video" || !provider.video) return;
+
+            if (isMainVideoSource(source)) {
+                // The main VideoCMS stream needs vc_media on cross-origin media requests.
+                provider.video.crossOrigin = "use-credentials";
+            } else {
+                // External video ads may not return credentialed CORS headers.
+                // Remove the attribute so normal cross-origin media playback can proceed.
+                provider.video.removeAttribute("crossorigin");
+            }
         }
 
         function registerSubtitleTracks() {
@@ -896,18 +911,30 @@
 
             if (!provider) return;
 
+            const needsMediaCredentials = isMainVideoSource();
+
             if (provider.type === 'hls') {
-                // Existing, tested HLS cross-domain cookie handling.
+                // Only the main VideoCMS stream needs the vc_media cookie.
+                // External HLS ads (if added later) should not inherit credentials.
                 provider.config = {
                     xhrSetup: (xhr) => {
-                        xhr.withCredentials = true;
+                        xhr.withCredentials = needsMediaCredentials;
                     }
                 };
             } else if (provider.type === 'video') {
-                // Native HTML5 video provider (MP4).
-                // Enable credentialed cross-origin media requests.
-                provider.video.crossOrigin = 'use-credentials';
+                applyNativeVideoCredentialPolicy(provider);
             }
+        });
+
+        // provider-change does not fire when a source changes but the provider
+        // remains the same (e.g. MP4 content -> MP4 ad). Update credentials before
+        // Vidstack loads the new source, otherwise the ad inherits use-credentials.
+        player.addEventListener('source-change', (event) => {
+            const provider = player.provider;
+            if (!provider || provider.type !== 'video') return;
+
+            const nextSource = event.detail?.src || event.detail || "";
+            applyNativeVideoCredentialPolicy(provider, nextSource);
         });
 
         // 2. Move Hook into provider-setup after media provider is fully initialized and stable. 

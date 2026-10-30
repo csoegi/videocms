@@ -53,6 +53,9 @@ func LoadSnapshot(db *gorm.DB, base config.Config) (app.Snapshot, error) {
 
 	env.MaxItemsMultiDelete = getEnvDb_int64(&setting.MaxItemsMultiDelete, 1000)
 	env.MaxRunningEncodes = getEnvDb_int64(&setting.MaxRunningEncodes, 1)
+	env.HLSConverterIntervalMins = getEnvDb_int64(&setting.HLSConverterIntervalMins, 30)
+	env.HLSConverterBatchSize = getEnvDb_int64(&setting.HLSConverterBatchSize, 2)
+	env.HLSConverterDeleteOrginal = *getEnvDb_bool(&setting.HLSConverterDeleteOrginal, boolPtr(false))
 	env.MaxFramerate = getEnvDb_int64(&setting.MaxFramerate, 60)
 
 	if setting.MaxUploadChunkSize == "" && setting.LegacyMaxUploadChunkSize != "" {

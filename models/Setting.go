@@ -40,6 +40,9 @@ type Setting struct {
 
 	MaxItemsMultiDelete string `validate:"required,number,min=1"`
 	MaxRunningEncodes   string `validate:"required,number,min=1"`
+	HLSConverterIntervalMins string `validate:"required,number,min=0"`
+	HLSConverterBatchSize string `validate:"required,number,min=1,max=100"`
+	HLSConverterDeleteOrginal string `validate:"required,boolean"`
 	MaxFramerate        string `validate:"required,number,min=1"`
 
 	MaxUploadFilesize        string `validate:"required,number,min=1"`

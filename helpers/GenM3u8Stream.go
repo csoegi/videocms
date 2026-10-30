@@ -5,6 +5,16 @@ import (
 	"fmt"
 )
 
+func qualityMediaPlaylist(outputFile string) string {
+	// The converter stores both master.m3u8 (a per-quality wrapper) and
+	// video.m3u8 (the actual media playlist). The top-level master should
+	// point to the media playlist instead of nesting another master.
+	if outputFile == "master.m3u8" {
+		return "video.m3u8"
+	}
+	return outputFile
+}
+
 func GenM3u8Stream(folderVideoQualitysPub string, dbLink *models.Link, qualitys *[]models.Quality, audio *models.Audio) string {
 	m3u8 := "#EXTM3U\n#EXT-X-VERSION:6"
 	if audio != nil {
@@ -20,7 +30,7 @@ func GenM3u8Stream(folderVideoQualitysPub string, dbLink *models.Link, qualitys 
 				"\n#EXT-X-STREAM-INF:BANDWIDTH=%d,AUDIO=\"AAC\",RESOLUTION=%s,CODECS=\"avc1.640015,mp4a.40.2\"\n%s",
 				int64(quality.Height*quality.Width*2),
 				fmt.Sprintf("%dx%d", quality.Width, quality.Height),
-				fmt.Sprintf("%s/%s/%s/%s", folderVideoQualitysPub, dbLink.UUID, quality.Name, quality.OutputFile),
+				fmt.Sprintf("%s/%s/%s/%s", folderVideoQualitysPub, dbLink.UUID, quality.Name, qualityMediaPlaylist(quality.OutputFile)),
 			)
 		}
 
@@ -68,7 +78,7 @@ func GenM3u8StreamMulti(folderVideoQualitysPub string, dbLink *models.Link, qual
 				int64(quality.Height*quality.Width*2),
 				audioTag,
 				fmt.Sprintf("%dx%d", quality.Width, quality.Height),
-				fmt.Sprintf("%s/%s/%s/%s", folderVideoQualitysPub, dbLink.UUID, quality.Name, quality.OutputFile),
+				fmt.Sprintf("%s/%s/%s/%s", folderVideoQualitysPub, dbLink.UUID, quality.Name, qualityMediaPlaylist(quality.OutputFile)),
 			)
 		}
 

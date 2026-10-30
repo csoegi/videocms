@@ -1,0 +1,26 @@
+services:
+  videocms-staging:
+    image: chrissoe/videocms:staging
+    pull_policy: always
+    restart: unless-stopped
+
+    # In Coolify, set the service domain to vms-stg.ulul.lol and container port to 3000.
+    expose:
+      - "3000"
+
+    # Keep staging completely separate from production media and database.
+    volumes:
+      - /data/videocms-staging/videos:/app/videos
+      - /data/videocms-staging/database:/app/database
+
+    environment:
+      Host: ":3000"
+      PublisherMode: "local"
+      FolderVideoQualitysPriv: "/app/videos/staging"
+      FolderVideoQualitysFinal: "/app/videos/qualitys"
+      FolderVideoQualitysPub: "/videos/qualitys"
+      FolderVideoArchives: "/app/videos/archives"
+      FolderVideoUploadsPriv: "/app/videos/uploads"
+
+    labels:
+      caddy_0.request_body.max_size: 20G
