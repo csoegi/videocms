@@ -1,4 +1,4 @@
-.PHONY: dev dev-backend dev-frontend build build-backend build-frontend prod clean docker-build dckb dcktest publish bump-minor bump-patch
+.PHONY: dev dev-backend dev-frontend build build-backend build-frontend prod clean docker-build docker-staging docker-publish docker-run dckb dcktest publish bump-minor bump-patch
 
 VERSION ?= $(shell cat VERSION.txt 2>/dev/null || echo "1.0.0")
 LOCAL_IMAGE = videocms:local
@@ -96,6 +96,22 @@ docker-run:
 		-v $$(pwd)/videos:/app/videos \
 		$(LOCAL_IMAGE)
 	@echo "✅ Container Running Local Image on http://localhost:3000"
+
+# Build and publish a dedicated staging image from the currently checked-out branch.
+# The immutable versioned tag helps identify a test build; the staging tag is used by Coolify.
+# Never update :latest here; production remains controlled by docker-publish.
+docker-staging:
+	@echo "🐳 Building Staging Multi-Platform Release Images for $(VERSION)..."
+	docker buildx build \
+		-f Dockerfile \
+		--platform linux/amd64,linux/arm64 \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg CHANNEL=staging \
+		--build-arg DOCKER_IMAGE_TAG=$(VERSION)-staging \
+		-t $(DOCKERHUB_IMAGE):$(VERSION)-staging \
+		-t $(DOCKERHUB_IMAGE):staging \
+		--push .
+	@echo "🚀 Staging images successfully published: $(DOCKERHUB_IMAGE):$(VERSION)-staging and $(DOCKERHUB_IMAGE):staging."
 
 # Build and push the Docker image to Docker Hub with both version tag and latest tag. 
 # This is used in CI after a successful build to publish the new version of the application.

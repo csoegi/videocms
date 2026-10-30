@@ -1,13 +1,13 @@
 package logic
 
 import (
+	"io"
 	"ch/kirari04/videocms/config"
 	"ch/kirari04/videocms/helpers"
 	"ch/kirari04/videocms/models"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"math"
 	"net/http"
@@ -252,6 +252,8 @@ func (s *Service) createFile(
 			return http.StatusInternalServerError, nil, false, fmt.Errorf("failed to prepare direct-media staging directory: %w", err)
 		}
 		directPath := filepath.Join(directQualityDir, outputFile)
+		// Original archiving is deferred until the HLS converter has produced
+		// and validated its output, avoiding an extra copy at upload time.
 		if err := moveFileToPath(*fromFile, directPath); err != nil {
 			return http.StatusInternalServerError, nil, false, fmt.Errorf("failed to stage direct media: %w", err)
 		}
@@ -591,6 +593,7 @@ func (s *Service) createFile(
 	// return link to file
 	return http.StatusOK, &dbLink, false, nil
 }
+
 
 // moveFileToPath prefers an atomic rename and falls back to a copy when the
 // upload/staging directories are on different filesystems.

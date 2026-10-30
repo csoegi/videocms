@@ -73,6 +73,7 @@ func MigrateModels(gormDB *gorm.DB) error {
 		&models.TrafficLog{},
 		&models.UploadLog{},
 		&models.EncodingLog{},
+		&models.ConverterLog{},
 		&models.RemoteDownload{},
 		&models.RemoteDownloadLog{},
 		&models.DownloadJob{},
