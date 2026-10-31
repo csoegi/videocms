@@ -8,6 +8,9 @@ import (
 
 func TestResolveMP4DownloadRequiresExactlyOneReadyAudio(t *testing.T) {
 	link := downloadSelectionTestLink()
+	// This test covers a direct-media source, not HLS (which may contain
+	// its own embedded audio stream and is tested separately).
+	link.File.Qualitys[0].Type = "mp4"
 
 	for _, audioUUIDs := range [][]string{
 		nil,
