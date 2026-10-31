@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -16,6 +17,7 @@ type Selection struct {
 	Container     string
 	MediaDuration float64
 	Quality       models.Quality
+	QualityRoot   string
 	Audios        []models.Audio
 	Subtitles     []models.Subtitle
 }
@@ -70,6 +72,21 @@ func ResolveSelection(
 	if container == ContainerMP4 {
 		if len(subtitleUUIDs) > 0 {
 			return nil, errors.New("MP4 downloads do not support subtitle selection")
+		}
+		if isHLSQuality(selection.Quality) {
+			// The HLS playlist may already contain a muxed audio stream. A
+			// separate audio row is optional, but MP4 can contain at most one.
+			if len(audioUUIDs) > 1 {
+				return nil, errors.New("MP4 downloads support at most one selected audio track for HLS")
+			}
+			if len(audioUUIDs) == 1 {
+				audio, exists := readyAudios[audioUUIDs[0]]
+				if !exists {
+					return nil, errors.New("selected audio track is not available")
+				}
+				selection.Audios = []models.Audio{audio}
+			}
+			return selection, nil
 		}
 		if len(audioUUIDs) != 1 {
 			return nil, errors.New("MP4 downloads require exactly one audio track")
@@ -145,17 +162,27 @@ func FFmpegArgs(selection *Selection, outputPath string, reportProgress bool) []
 		"-hide_banner",
 		"-loglevel", "error",
 		"-y",
-		"-i", filepath.Join(selection.Quality.Path, selection.Quality.OutputFile),
+		"-i", qualityInputPath(selection.QualityRoot, selection.Quality),
 	}
 
 	for _, audio := range selection.Audios {
 		args = append(args, "-i", filepath.Join(audio.Path, audio.OutputFile))
 	}
 	for _, subtitle := range selection.Subtitles {
+		if isWebVTTSubtitle(subtitle) {
+			// Some uploaded SRT files are stored with WebVTT content and a
+			// .srt filename. Force the demuxer from the persisted track type.
+			args = append(args, "-f", "webvtt")
+		}
 		args = append(args, "-i", filepath.Join(subtitle.Path, subtitle.OutputFile))
 	}
 
 	args = append(args, "-map", "0:v:0")
+	if isHLSQuality(selection.Quality) && len(selection.Audios) == 0 {
+		// Converted HLS variants are muxed: audio, when present, is in the
+		// same playlist as video. Keep it optional for silent HLS sources.
+		args = append(args, "-map", "0:a:0?")
+	}
 	inputIndex := 1
 	for audioIndex, audio := range selection.Audios {
 		args = append(args,
@@ -175,6 +202,13 @@ func FFmpegArgs(selection *Selection, outputPath string, reportProgress bool) []
 	}
 
 	args = append(args, "-c", "copy")
+	for subtitleIndex, subtitle := range selection.Subtitles {
+		if isWebVTTSubtitle(subtitle) {
+			// WebVTT is not a compatible subtitle codec for Matroska. Convert
+			// only these streams to SubRip; leave ASS and other formats copied.
+			args = append(args, fmt.Sprintf("-c:s:%d", subtitleIndex), "srt")
+		}
+	}
 	if selection.Container == ContainerMP4 {
 		args = append(args, "-movflags", "+faststart", "-f", "mp4")
 	} else {
@@ -184,4 +218,49 @@ func FFmpegArgs(selection *Selection, outputPath string, reportProgress bool) []
 		args = append(args, "-progress", "pipe:1", "-nostats")
 	}
 	return append(args, outputPath)
+}
+
+func isHLSQuality(quality models.Quality) bool {
+	return strings.EqualFold(strings.TrimSpace(quality.Type), "hls")
+}
+
+func isWebVTTSubtitle(subtitle models.Subtitle) bool {
+	return strings.EqualFold(strings.TrimSpace(subtitle.Type), "vtt") ||
+		strings.EqualFold(strings.TrimSpace(subtitle.Type), "webvtt") ||
+		strings.EqualFold(strings.TrimSpace(subtitle.Codec), "webvtt") ||
+		strings.EqualFold(filepath.Ext(subtitle.OutputFile), ".vtt")
+}
+
+// qualityInputPath supports both historical HLS rows (Path includes
+// master.m3u8) and the corrected convention (Path is the quality directory).
+// HLS paths produced by the converter are relative to the permanent media root.
+func qualityInputPath(root string, quality models.Quality) string {
+	path := strings.TrimSpace(quality.Path)
+	output := strings.TrimSpace(quality.OutputFile)
+	if output == "" {
+		return path
+	}
+	output = filepath.Base(output)
+	if filepath.Base(path) == output {
+		path = filepath.Dir(path)
+	}
+	if path == "" {
+		return output
+	}
+
+	if isHLSQuality(quality) && !filepath.IsAbs(path) && strings.TrimSpace(root) != "" {
+		rootAbs, rootErr := filepath.Abs(root)
+		pathAbs, pathErr := filepath.Abs(path)
+		alreadyUnderRoot := false
+		if rootErr == nil && pathErr == nil {
+			rel, err := filepath.Rel(rootAbs, pathAbs)
+			alreadyUnderRoot = err == nil &&
+				rel != ".." &&
+				!strings.HasPrefix(rel, ".."+string(filepath.Separator))
+		}
+		if !alreadyUnderRoot {
+			path = filepath.Join(root, path)
+		}
+	}
+	return filepath.Join(path, output)
 }

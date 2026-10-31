@@ -184,6 +184,7 @@ func (w *WorkerGroup) processDownloadPreparation(parentCtx context.Context, job 
 		w.failDownloadJob(&job, "source_changed", "The selected tracks are no longer available.", err)
 		return
 	}
+	selection.QualityRoot = w.Config().PublishedQualitysRoot()
 
 	dir := w.downloadJobDirectory()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
