@@ -848,7 +848,7 @@
                                 <span class="choice-main">
                                     <span class="choice-title">MP4</span>
                                     <span class="choice-detail">
-                                        {{if .HasDirectMP4}}Original MP4 can be downloaded directly{{else if .CanUseMP4}}One audio track, no subtitles{{else}}No ready audio track{{end}}
+                                        {{if .HasDirectMP4}}Original MP4 can be downloaded directly{{else if .HasHLS}}HLS audio when available, or one selected track; no subtitles{{else if .CanUseMP4}}One audio track, no subtitles{{else}}No ready audio track{{end}}
                                     </span>
                                 </span>
                                 <span class="choice-mark" aria-hidden="true"></span>
@@ -895,7 +895,7 @@
                                 {{end}}
                             </div>
                             {{else}}
-                            <p class="empty">No audio tracks are ready. The MKV will contain video only.</p>
+                            <p class="empty" data-no-audio-note>No separate audio tracks are ready. The output will contain video only.</p>
                             {{end}}
                         </div>
 
@@ -1104,13 +1104,23 @@
                 });
                 const quality = document.querySelector('input[name="quality"]:checked');
                 const sourceType = quality?.dataset.type;
+                const noAudioNote = document.querySelector("[data-no-audio-note]");
+                if (noAudioNote) {
+                    noAudioNote.textContent = sourceType === "hls"
+                        ? "No separate audio tracks are ready. Audio embedded in the HLS stream will be included when available."
+                        : "No audio tracks are ready. The output will contain video only.";
+                }
                 tracksHelp.textContent = sourceType === "mp4" || sourceType === "mkv"
                     ? (container === sourceType
                         ? `The original ${sourceType.toUpperCase()} can be downloaded without remuxing.`
                         : `The source ${sourceType.toUpperCase()} will be remuxed to ${container.toUpperCase()} without video re-encoding when the codecs are compatible.`)
-                    : container === "mp4"
-                        ? "MP4 requires one audio track. Subtitle selection is available with MKV."
-                        : "MKV can include any combination of ready audio and subtitle tracks.";
+                    : sourceType === "hls"
+                        ? container === "mp4"
+                            ? "Embedded HLS audio is included when available. You may select at most one separate audio track; subtitles require MKV."
+                            : "Embedded HLS audio is included when no separate audio track is selected. Selected separate tracks are used instead."
+                        : container === "mp4"
+                            ? "MP4 requires one audio track. Subtitle selection is available with MKV."
+                            : "MKV can include any combination of ready audio and subtitle tracks.";
                 error.textContent = "";
                 updateSummary();
             };
@@ -1133,7 +1143,9 @@
                     ? `${quality.value} · ${quality.dataset.detail}`
                     : "—";
                 summary.container.textContent = container.toUpperCase();
-                summary.audio.textContent = countLabel(audioCount, "track");
+                summary.audio.textContent = audioCount === 0 && quality?.dataset.type === "hls"
+                    ? "Embedded (when available)"
+                    : countLabel(audioCount, "track");
                 summary.subtitle.textContent = container === "mp4"
                     ? "Not included"
                     : countLabel(subtitleCount, "track");
@@ -1439,8 +1451,11 @@
                     window.location.href = `${form.dataset.downloadBase}/${encodeURIComponent(quality.value)}/1/stream/video.${container}?${params.toString()}`;
                     return;
                 }
-                if (container === "mp4" && audioCount !== 1) {
-                    error.textContent = "Choose exactly one audio track for MP4.";
+                if (container === "mp4" &&
+                    (quality.dataset.type === "hls" ? audioCount > 1 : audioCount !== 1)) {
+                    error.textContent = quality.dataset.type === "hls"
+                        ? "Choose at most one separate audio track for MP4."
+                        : "Choose exactly one audio track for MP4.";
                     return;
                 }
 

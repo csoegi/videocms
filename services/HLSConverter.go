@@ -330,8 +330,10 @@ func (w *WorkerGroup) logConverterFailure(q models.Quality, file models.File, in
 
 
 func converterStoredPath(root, outDir string) string {
-	rel, err := filepath.Rel(root, filepath.Join(outDir, "master.m3u8"))
-	if err != nil { return filepath.Join(filepath.Base(outDir), "master.m3u8") }
+	rel, err := filepath.Rel(root, outDir)
+	if err != nil {
+		return filepath.Base(outDir)
+	}
 	return rel
 }
 

@@ -165,6 +165,7 @@ func (h *Handlers) DownloadVideoController(c echo.Context) error {
 	if err != nil {
 		return c.String(http.StatusBadRequest, err.Error())
 	}
+	selection.QualityRoot = h.Config().PublishedQualitysRoot()
 
 	tmpFilePath := filepath.Join(
 		h.Config().FolderVideoUploadsPriv,
@@ -296,6 +297,12 @@ func remuxDirectMediaDownload(ctx context.Context, sourcePath, outputPath, conta
 		subPath := filepath.Join(sub.Path, filepath.Base(sub.OutputFile))
 		if info, err := os.Stat(subPath); err != nil || !info.Mode().IsRegular() {
 			return fmt.Errorf("subtitle file is unavailable: %s", sub.Name)
+		}
+		if strings.EqualFold(sub.Type, "vtt") ||
+			strings.EqualFold(sub.Type, "webvtt") ||
+			strings.EqualFold(sub.Codec, "webvtt") ||
+			strings.EqualFold(filepath.Ext(sub.OutputFile), ".vtt") {
+			args = append(args, "-f", "webvtt")
 		}
 		args = append(args, "-i", subPath)
 	}

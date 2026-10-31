@@ -68,6 +68,7 @@ func (h *Handlers) DownloadPageController(c echo.Context) error {
 	// Direct media can be downloaded without building a new container with FFmpeg.
 	hasDirectMP4 := false
 	hasDirectMKV := false
+	hasHLS := false
 	for _, quality := range dbLink.File.Qualitys {
 		if !quality.Ready {
 			continue
@@ -77,6 +78,8 @@ func (h *Handlers) DownloadPageController(c echo.Context) error {
 			hasDirectMP4 = true
 		case "mkv":
 			hasDirectMKV = true
+		case "hls":
+			hasHLS = true
 		}
 	}
 	subtitles := downloadSubtitleOptions(dbLink.File.Subtitles)
@@ -93,9 +96,10 @@ func (h *Handlers) DownloadPageController(c echo.Context) error {
 		"Audios":       audios,
 		"Subtitles":    subtitles,
 		"CanDownload":  len(qualities) > 0,
-		"CanUseMP4":    hasDirectMP4 || hasDirectMKV || len(audios) > 0,
+		"CanUseMP4":    hasDirectMP4 || hasDirectMKV || hasHLS || len(audios) > 0,
 		"HasDirectMP4": hasDirectMP4,
 		"HasDirectMKV": hasDirectMKV,
+		"HasHLS":       hasHLS,
 	})
 }
 
