@@ -218,27 +218,27 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 
 	// --- Start Ad Decision Engine ---
 	var activeAd models.Advertisement
+	var activeScriptAd models.Advertisement
 
-	// Read  the configuration snapshot
+	// Keep the existing global master switch, but scope both ad queries to the video owner.
 	snapshotConfig := h.Config()
-
-	// Determine if we should show ads: if AdsVisibility global setting is true and CMS user is non logged-in user,
-	// logged-in users will send bypass_ads=true to skip ads)
 	showAds := snapshotConfig.AdsVisibility && c.QueryParam("bypass_ads") != "true"
 
 	if showAds {
-		// Identify device category (mobile, desktop, tablet) based on User-Agent
 		device := helpers.GetDeviceCategory(c.Request().UserAgent())
 
-		// Query for a matching ad:
-		// 1. Matches the specific UserID of the video link owner (Tenant Isolation)
-		// 2. Is Active
-		// 3. Matches the device category or is set to 'all'
-		// 4. Sorted by Priority (High to Low), then Random
-		h.Deps.DB.Where("user_id = ? AND is_active = ? AND ads_device IN (?, 'all')",
-			dbLink.UserID, true, device).
+		// Preserve the existing banner/video decision path. Script ads are selected
+		// separately so they do not replace a preroll or mid-roll advertisement.
+		h.Deps.DB.Where("user_id = ? AND is_active = ? AND ads_device IN (?, 'all') AND ads_type IN ?",
+			dbLink.UserID, true, device, []string{"video", "banner"}).
 			Order("ads_priority DESC, RANDOM()").
 			First(&activeAd)
+
+		// Render one tenant-owned script ad at the bottom of the player document.
+		h.Deps.DB.Where("user_id = ? AND is_active = ? AND ads_device IN (?, 'all') AND ads_type = ?",
+			dbLink.UserID, true, device, "script").
+			Order("ads_priority DESC, RANDOM()").
+			First(&activeScriptAd)
 	}
 	// --- End Ad Decision Engine ---
 
@@ -306,6 +306,7 @@ func (h *Handlers) PlayerController(c echo.Context) error {
 		"AdsLink":        activeAd.AdsLink,
 		"AdsDisplay":     activeAd.AdsDisplay,
 		"AdsSkipSeconds": snapshotConfig.AdsSkipSeconds,
+		"AdsScript":      template.HTML(activeScriptAd.AdsLink),
 		// --- Watermark Settings ---
 		"WatermarkEnabled":      snapshotConfig.WatermarkEnabled,
 		"WatermarkType":         snapshotConfig.WatermarkType,

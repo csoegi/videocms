@@ -5,7 +5,7 @@ type Advertisement struct {
 	User        User `json:"-"`
 	UserID      uint
 	AdsName     string `gorm:"type:varchar(255);not null"`
-	AdsType     string `gorm:"type:varchar(50);not null;index"`      // video | banner [Use index for faster queries when filtering by ad type]
+	AdsType     string `gorm:"type:varchar(50);not null;index"`      // video | banner | script
 	AdsLink     string `gorm:"type:text;not null"`                   // Path to mp4 or static page slug (/p/my-ads)
 	AdsDisplay  string `gorm:"type:varchar(50);not null;index"`      // before_start | mid_roll [Use index for faster queries when filtering by display position]
 	AdsDevice   string `gorm:"type:varchar(50);default:'all';index"` // all | desktop | mobile | tablet [Use index for faster queries when filtering by device]
@@ -15,7 +15,7 @@ type Advertisement struct {
 
 type AdvertisementCreateValidation struct {
 	AdsName     string `json:"ads_name" validate:"required,min=3,max=255"`
-	AdsType     string `json:"ads_type" validate:"required,oneof=video banner"`
+	AdsType     string `json:"ads_type" validate:"required,oneof=video banner script"`
 	AdsLink     string `json:"ads_link" validate:"required"`
 	AdsDisplay  string `json:"ads_display" validate:"required"`
 	AdsDevice   string `json:"ads_device" validate:"required,oneof=all desktop mobile tablet"`
@@ -25,7 +25,7 @@ type AdvertisementCreateValidation struct {
 
 type AdvertisementUpdateValidation struct {
 	AdsName     string `json:"ads_name" validate:"omitempty,min=3,max=255"`
-	AdsType     string `json:"ads_type" validate:"omitempty,oneof=video banner"`
+	AdsType     string `json:"ads_type" validate:"omitempty,oneof=video banner script"`
 	AdsLink     string `json:"ads_link" validate:"omitempty"`
 	AdsDisplay  string `json:"ads_display" validate:"omitempty"`
 	AdsDevice   string `json:"ads_device" validate:"omitempty,oneof=all desktop mobile tablet"`
