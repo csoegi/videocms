@@ -171,7 +171,7 @@ func (s *Service) createFile(
 	videoDuration := data.Format.Duration().Seconds()
 	hasVideoStream := false
 
-	if videoDuration == 0 || videoDuration > 60*60*10 {
+	if videoDuration == 0 {
 		return http.StatusBadRequest, nil, false, errors.New("invalid video duration")
 	}
 
